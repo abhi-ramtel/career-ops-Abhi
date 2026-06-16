@@ -100,8 +100,8 @@ const SECTION_ALIASES = new Map([
   ['selected projects', 'projects'],
   ['personal projects', 'projects'],
   ['education', 'education'],
-  ['education & certifications', 'education'],
-  ['certifications', 'certifications'],
+  // ['education & certifications', 'education'],
+  // ['certifications', 'certifications'],
   ['skills', 'skills'],
   ['technical skills', 'skills'],
 ]);
@@ -268,32 +268,57 @@ export async function renderHtmlToPdf(html, outputPath, opts = {}) {
     // Wait for fonts to load
     await page.evaluate(() => document.fonts.ready);
 
-    // Generate PDF
-    const pdfBuffer = await page.pdf({
-      format: format,
-      printBackground: true,
-      margin: {
-        top: '0.6in',
-        right: '0.6in',
-        bottom: '0.6in',
-        left: '0.6in',
-      },
-      preferCSSPageSize: false,
-    });
-
-    // Write PDF
+    // Try to generate a one-page PDF by progressively scaling down until it fits
+    // or a minimum scale is reached. This keeps the change local and non-breaking.
     const { writeFile } = await import('fs/promises');
-    await writeFile(outputPath, pdfBuffer);
 
-    // Count pages (approximate from PDF structure)
-    const pdfString = pdfBuffer.toString('latin1');
-    const pageCount = (pdfString.match(/\/Type\s*\/Page[^s]/g) || []).length;
+    const pageCountFromBuffer = (buffer) => {
+      try {
+        const s = buffer.toString('latin1');
+        return (s.match(/\/Type\s*\/Page[^s]/g) || []).length;
+      } catch (e) {
+        return 0;
+      }
+    };
+
+    // Candidate scales to attempt. Start at 1 and gradually shrink.
+    const scales = [1, 0.98, 0.96, 0.94, 0.92, 0.9, 0.88, 0.86, 0.84, 0.82, 0.8, 0.76, 0.72, 0.68];
+    let finalBuffer = null;
+    let finalPageCount = 0;
+    for (const scale of scales) {
+      const pdfBuffer = await page.pdf({
+        format: format,
+        printBackground: true,
+        margin: {
+          top: '0.45in',
+          right: '0.45in',
+          bottom: '0.45in',
+          left: '0.45in',
+        },
+        preferCSSPageSize: true,
+        scale,
+      });
+
+      const pages = pageCountFromBuffer(pdfBuffer);
+      // Keep the latest buffer so we can write it out later.
+      finalBuffer = pdfBuffer;
+      finalPageCount = pages;
+
+      if (pages <= 1) {
+        // Found a one-page result — stop shrinking.
+        break;
+      }
+    }
+
+    if (!finalBuffer) throw new Error('Failed to generate PDF buffer');
+
+    await writeFile(outputPath, finalBuffer);
 
     console.log(`✅ PDF generated: ${outputPath}`);
-    console.log(`📊 Pages: ${pageCount}`);
-    console.log(`📦 Size: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
+    console.log(`📊 Pages: ${finalPageCount}`);
+    console.log(`📦 Size: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
 
-    return { outputPath, pageCount, size: pdfBuffer.length };
+    return { outputPath, pageCount: finalPageCount, size: finalBuffer.length };
   } finally {
     await browser.close();
   }

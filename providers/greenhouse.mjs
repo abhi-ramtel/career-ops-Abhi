@@ -70,6 +70,7 @@ export default {
       url: j.absolute_url,
       company: entry.name,
       location: j.location?.name || '',
+      description: typeof j.content === 'string' ? j.content : '',
       postedAt: toEpochMs(j.first_published),
     }));
   },

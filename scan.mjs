@@ -133,6 +133,42 @@ export function buildTitleFilter(titleFilter) {
   };
 }
 
+const GLOBAL_EXCLUSION_PATTERNS = [
+  /we are unable to offer sponsorship for this role/i,
+  /unable to offer sponsorship/i,
+  /no visa sponsorship/i,
+  /no sponsorship/i,
+  /will not sponsor/i,
+  /won'?t sponsor/i,
+  /cannot sponsor/i,
+  /without visa support or sponsorship/i,
+];
+
+function gatherJobText(job) {
+  return [
+    job?.title,
+    job?.company,
+    job?.location,
+    job?.description,
+    job?.text,
+    job?.snippet,
+    job?.summary,
+    job?.details,
+    job?.body,
+    job?.content,
+    job?.descriptionPlain,
+    job?.descriptionHtml,
+  ]
+    .filter(value => typeof value === 'string' && value.trim() !== '')
+    .join('\n');
+}
+
+function matchesGlobalExclusion(job) {
+  const text = gatherJobText(job);
+  if (!text) return false;
+  return GLOBAL_EXCLUSION_PATTERNS.some(pattern => pattern.test(text));
+}
+
 // ── Location filter ─────────────────────────────────────────────────
 // Optional. If `location_filter` is absent from portals.yml, all locations pass.
 // Semantics (case-insensitive substring, in this order):
@@ -711,6 +747,7 @@ async function main() {
   const date = new Date().toISOString().slice(0, 10);
   let totalFound = 0;
   let totalFilteredTitle = 0;
+  let totalFilteredGlobal = 0;
   let totalFilteredLocation = 0;
   let totalFilteredSalary = 0;
   let totalDupes = 0;
@@ -743,6 +780,10 @@ async function main() {
       totalFound += jobs.length;
 
       for (const job of jobs) {
+        if (matchesGlobalExclusion(job)) {
+          totalFilteredGlobal++;
+          continue;
+        }
         if (!titleFilter(job.title)) {
           totalFilteredTitle++;
           continue;
@@ -849,6 +890,7 @@ async function main() {
   console.log(`Companies scanned:     ${summaryCompanies}`);
   if (summaryBoards > 0) console.log(`Job boards scanned:    ${summaryBoards}`);
   console.log(`Total jobs found:      ${totalFound}`);
+  console.log(`Excluded globally:     ${totalFilteredGlobal} removed`);
   console.log(`Filtered by title:     ${totalFilteredTitle} removed`);
   console.log(`Filtered by location:  ${totalFilteredLocation} removed`);
   console.log(`Filtered by salary:   ${totalFilteredSalary} removed`);
