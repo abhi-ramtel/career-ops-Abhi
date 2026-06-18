@@ -211,16 +211,20 @@ async function main() {
   const seen = new Set();
   for (const url of SOURCE_URLS) {
     try {
+      console.error(`Fetching: ${url}`);
       const markdown = await fetchText(url);
-      for (const job of parseTableRows(markdown)) {
+      console.error(`Fetched ${markdown.length} bytes`);
+      const parsed = parseTableRows(markdown);
+      console.error(`Parsed ${parsed.length} jobs from this URL`);
+      for (const job of parsed) {
         const key = `${job.company}::${job.title}::${job.url}`;
         if (seen.has(key)) continue;
         seen.add(key);
         results.push(job);
       }
       if (results.length > 0) break;
-    } catch {
-      // Try the next source URL.
+    } catch (error) {
+      console.error(`Failed to fetch ${url}: ${error.message}`);
     }
   }
 
