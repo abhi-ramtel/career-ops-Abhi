@@ -146,6 +146,11 @@ export default {
           company: entry.name,
           location: formatLocation(j),
           salary: parseCompensation(j),
+          description: typeof j.descriptionPlain === 'string'
+            ? j.descriptionPlain
+            : typeof j.descriptionHtml === 'string'
+              ? j.descriptionHtml
+              : '',
           postedAt: toEpochMs(j.publishedAt),
         }));
       } catch (e) {

@@ -14,6 +14,14 @@ const HARD_EXPIRED_PATTERNS = [
   /closed on (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}/i,
   /diese stelle (ist )?(nicht mehr|bereits) besetzt/i,
   /offre (expirée|n'est plus disponible)/i,
+  /we are unable to offer sponsorship for this role/i,
+  /unable to offer sponsorship/i,
+  /no visa sponsorship/i,
+  /no sponsorship/i,
+  /will not sponsor/i,
+  /won'?t sponsor/i,
+  /cannot sponsor/i,
+  /without visa support or sponsorship/i,
 ];
 
 const LISTING_PAGE_PATTERNS = [

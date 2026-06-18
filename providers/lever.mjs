@@ -30,6 +30,11 @@ export default {
       url: j.hostedUrl || '',
       company: entry.name,
       location: j.categories?.location || '',
+      description: typeof j.description === 'string'
+        ? j.description
+        : typeof j.descriptionPlain === 'string'
+          ? j.descriptionPlain
+          : '',
       postedAt: typeof j.createdAt === 'number' ? j.createdAt : undefined,
     }));
   },

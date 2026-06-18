@@ -71,6 +71,11 @@ export default {
           url: ep.jobBase + j.externalPath,
           company: entry.name,
           location: j.locationsText || '',
+          description: typeof j.description === 'string'
+            ? j.description
+            : typeof j.jobDescription === 'string'
+              ? j.jobDescription
+              : '',
           postedAt: parsePostedOn(j.postedOn),
         });
       }
