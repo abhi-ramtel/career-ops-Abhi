@@ -18,6 +18,18 @@ Agent(
 )
 ```
 
+## Personalized Ranking (REQUIRED)
+
+This scan is not a raw keyword dump. After collecting and deduplicating
+candidates, **score every new offer with the weighted fit rubric in
+`modes/_profile.md` → "Personalized Fit Scoring"** (Skills 35% · Experience 25%
+· Career Interest 15% · Location & Work Auth 15% · Company Quality 10%), using
+`cv.md`, `config/profile.yml`, and `data/applications.md` history. Present
+results **ranked high → low** with a one-line reason each, list what was
+filtered out and why, and recommend applying only to ≥4.0/5 fits. The goal is
+*fewer, higher-quality* matches the candidate is realistically competitive for —
+not maximum volume.
+
 ## Configuration
 
 Read `portals.yml` which contains:
@@ -25,6 +37,16 @@ Read `portals.yml` which contains:
 - `tracked_companies`: Specific companies with `careers_url` for direct navigation
 - `tracked_companies[].parser`: Optional local parser for SSR pages or stable HTML
 - `title_filter`: Keywords (positive/negative/seniority_boost) for filtering job titles
+- `location_filter` (optional): US-focus allow/block/always_allow keywords
+- `salary_filter` (optional): annualized min/max compensation gate
+- `freshness_filter` (optional): `max_age_days` drops stale postings using the
+  provider-supplied posting date; `drop_undated` (default false) keeps postings
+  without a usable date. `npm run scan` enforces this automatically — when
+  scanning manually (Playwright/WebSearch), discard postings older than
+  `max_age_days` whenever a posting date is visible.
+- `job_boards`: Multi-employer aggregators (e.g. the SimplifyJobs New-Grad
+  Positions GitHub board, whose parser already drops closed, no-sponsorship,
+  citizenship-required, advanced-degree-only, and non-US rows).
 
 ## Discovery Strategy (4 Levels)
 
@@ -211,6 +233,14 @@ Levels are additive — they are executed in order, and results are merged and d
    - Non-empty `allow` → must match at least one keyword.
    - All matches are case-insensitive substring matches.
    - The location is persisted as the 7th column in `scan-history.tsv` for later auditing.
+
+6c. **Filter by Freshness (Optional)** using `freshness_filter` from `portals.yml`:
+   - If the block is absent, all postings pass (default behavior).
+   - `npm run scan` enforces this on zero-token providers automatically via the
+     provider-supplied posting date (`postedAt`).
+   - When scanning manually (Playwright/WebSearch), if a posting date is visible
+     and older than `max_age_days` (e.g. 14), discard it. If no date is visible,
+     keep it unless `drop_undated: true`.
 
 7. **Deduplicate** against 3 sources:
    - `scan-history.tsv` → exact URL already seen
