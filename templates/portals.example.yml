@@ -91,6 +91,24 @@
 #   max: 0
 #   currency: "USD"
 
+# -- Freshness filter (optional) --
+# Drop stale postings using the provider-supplied posting date (postedAt,
+# emitted by greenhouse/ashby/lever/workday). Applied AFTER the salary filter,
+# BEFORE dedup. If this block is absent, postings are not filtered by age.
+#
+# Semantics:
+#   - max_age_days: only surface jobs posted within this many days
+#     (must be a positive number; otherwise the filter is disabled with a warning)
+#   - drop_undated: if true, also drop postings without a usable date.
+#     Default false (conservative) — most WebSearch hits and some providers
+#     don't expose a date, so they pass rather than being silently dropped.
+#   - Future-dated postings (provider clock skew) pass.
+#
+# Example: only roles posted in the last 14 days, keep undated postings
+# freshness_filter:
+#   max_age_days: 14
+#   drop_undated: false
+
 # -- Title filter --
 # The scanner uses these keywords to decide if a title is relevant.
 # At least 1 positive must match AND 0 negatives must match (case-insensitive).

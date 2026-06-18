@@ -128,6 +128,20 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     }
   }
 
+  if (config.freshness_filter !== undefined) {
+    if (!isObject(config.freshness_filter)) {
+      add(errors, 'freshness_filter', 'freshness_filter must be an object');
+    } else {
+      const maxAge = config.freshness_filter.max_age_days;
+      if (maxAge !== undefined && (!Number.isFinite(Number(maxAge)) || Number(maxAge) <= 0)) {
+        add(errors, 'freshness_filter.max_age_days', 'max_age_days must be a positive number when set');
+      }
+      if (config.freshness_filter.drop_undated !== undefined && typeof config.freshness_filter.drop_undated !== 'boolean') {
+        add(errors, 'freshness_filter.drop_undated', 'drop_undated must be a boolean when set');
+      }
+    }
+  }
+
   if (config.search_queries !== undefined && !Array.isArray(config.search_queries)) {
     add(errors, 'search_queries', 'search_queries must be an array when set');
   }

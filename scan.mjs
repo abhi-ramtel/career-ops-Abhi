@@ -134,6 +134,7 @@ export function buildTitleFilter(titleFilter) {
 }
 
 const GLOBAL_EXCLUSION_PATTERNS = [
+  // -- Visa sponsorship --
   /we are unable to offer sponsorship for this role/i,
   /unable to offer sponsorship/i,
   /no visa sponsorship/i,
@@ -142,6 +143,17 @@ const GLOBAL_EXCLUSION_PATTERNS = [
   /won'?t sponsor/i,
   /cannot sponsor/i,
   /without visa support or sponsorship/i,
+  // -- Work authorization / eligibility --
+  // Patterns require the requirement context ("must"/"required"/"active"/
+  // "ability to obtain") so a passing mention ("no clearance needed") doesn't
+  // trigger a false exclusion. Targets candidates on F-1/OPT who need future
+  // sponsorship and cannot hold a US security clearance.
+  /requires?\s+(?:active\s+|current\s+|an?\s+)*(?:us\s+|u\.s\.\s+)?security clearance/i,
+  /active\s+(?:ts\/sci|top[- ]secret|secret|public trust)\s+clearance/i,
+  /(?:ability|able)\s+to\s+obtain\s+(?:a\s+|an\s+)?(?:us\s+)?(?:security\s+)?clearance/i,
+  /must\s+(?:be\s+(?:a\s+)?(?:us|u\.s\.)\s+citizen|hold\s+(?:us|u\.s\.)\s+citizenship)/i,
+  /(?:us|u\.s\.)\s+citizenship\s+(?:is\s+)?required/i,
+  /must\s+be\s+(?:a\s+)?(?:us|u\.s\.)\s+person/i,
 ];
 
 function gatherJobText(job) {
@@ -270,6 +282,48 @@ export function buildSalaryFilter(salaryFilter) {
 
     // Otherwise pass (overlap exists or no valid range to compare)
     return true;
+  };
+}
+
+// ── Freshness filter ────────────────────────────────────────────────
+// Optional. If `freshness_filter` is absent from portals.yml, all postings
+// pass. Drops stale postings using the provider-supplied `postedAt`
+// (epoch ms — emitted by greenhouse/ashby/lever/workday). Applied AFTER the
+// salary filter, BEFORE dedup.
+//
+// Semantics:
+//   - max_age_days missing / not a positive number → filter disabled (warn),
+//     all pass
+//   - postedAt missing or unparseable → PASS by default (conservative — most
+//     WebSearch hits and several ATS providers don't expose a date). Set
+//     `drop_undated: true` to instead reject postings without a usable date.
+//   - postedAt in the future (provider clock skew) → pass
+//   - otherwise pass only when (now - postedAt) <= max_age_days
+//
+// `now` is captured once at build time so a single scan classifies every
+// posting against the same clock (and so tests can inject a fixed clock).
+
+export function buildFreshnessFilter(freshnessFilter, { now = Date.now() } = {}) {
+  if (!freshnessFilter) return () => true;
+
+  const maxAgeDays = Number(freshnessFilter.max_age_days);
+  const dropUndated = freshnessFilter.drop_undated === true;
+
+  if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
+    console.error('Warning: freshness_filter.max_age_days must be a positive number — freshness filter disabled');
+    return () => true;
+  }
+
+  const maxAgeMs = maxAgeDays * 86_400_000;
+
+  return (postedAt) => {
+    // No usable date → keep unless the user opted into strict dropping.
+    if (postedAt == null) return !dropUndated;
+    const ts = Number(postedAt);
+    if (!Number.isFinite(ts)) return !dropUndated;
+    const age = now - ts;
+    if (age < 0) return true; // future-dated (clock skew) → keep
+    return age <= maxAgeMs;
   };
 }
 
@@ -678,6 +732,7 @@ async function main() {
   const titleFilter = buildTitleFilter(config.title_filter);
   const locationFilter = buildLocationFilter(config.location_filter);
   const salaryFilter = buildSalaryFilter(config.salary_filter);
+  const freshnessFilter = buildFreshnessFilter(config.freshness_filter);
 
   // 3. Resolve a provider for each enabled company / board
   const targets = [];
@@ -750,6 +805,7 @@ async function main() {
   let totalFilteredGlobal = 0;
   let totalFilteredLocation = 0;
   let totalFilteredSalary = 0;
+  let totalFilteredFreshness = 0;
   let totalDupes = 0;
   const newOffers = [];
   const errors = [...resolveErrors];
@@ -794,6 +850,10 @@ async function main() {
         }
         if (!salaryFilter(job.salary)) {
           totalFilteredSalary++;
+          continue;
+        }
+        if (!freshnessFilter(job.postedAt)) {
+          totalFilteredFreshness++;
           continue;
         }
         if (seenUrls.has(job.url)) {
@@ -894,6 +954,7 @@ async function main() {
   console.log(`Filtered by title:     ${totalFilteredTitle} removed`);
   console.log(`Filtered by location:  ${totalFilteredLocation} removed`);
   console.log(`Filtered by salary:   ${totalFilteredSalary} removed`);
+  console.log(`Filtered by freshness: ${totalFilteredFreshness} removed`);
   console.log(`Duplicates:            ${totalDupes} skipped`);
   if (historyPolicy.recheckAfterDays != null) {
     console.log(`Recheck eligible:      ${seenUrlState.recheckEligible} old scan-history URL(s)`);
