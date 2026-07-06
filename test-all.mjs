@@ -1572,6 +1572,109 @@ try {
   fail(`recruitee provider tests crashed: ${e.message}`);
 }
 
+// ── 16. PROVIDERS — BambooHR ────────────────────────────────────────
+
+console.log('\n16. Provider — bamboohr');
+
+try {
+  const bamboohr = (await import(pathToFileURL(join(ROOT, 'providers/bamboohr.mjs')).href)).default;
+  const { parseBambooHrJobs } = await import(pathToFileURL(join(ROOT, 'providers/bamboohr.mjs')).href);
+
+  if (bamboohr.id === 'bamboohr') pass('bamboohr.id is "bamboohr"');
+  else fail(`bamboohr.id is ${JSON.stringify(bamboohr.id)}`);
+
+  // detect() — auto-detection → embed2.php widget
+  const hit = bamboohr.detect({ name: 'TestCo', careers_url: 'https://testco.bamboohr.com/careers' });
+  if (hit && hit.url === 'https://testco.bamboohr.com/jobs/embed2.php') {
+    pass('bamboohr.detect() resolves <sub>.bamboohr.com → /jobs/embed2.php');
+  } else {
+    fail(`bamboohr.detect() returned ${JSON.stringify(hit)}`);
+  }
+
+  if (bamboohr.detect({ name: 'X', careers_url: 'https://example.com/careers' }) === null)
+    pass('bamboohr.detect() returns null for non-bamboohr URLs');
+  else fail('bamboohr.detect() should return null for non-bamboohr URLs');
+
+  if (bamboohr.detect({ name: 'X', careers_url: 'https://bamboohr.com/careers' }) === null)
+    pass('bamboohr.detect() returns null for the apex (no subdomain)');
+  else fail('bamboohr.detect() should reject the bamboohr.com apex');
+
+  if (bamboohr.detect({ name: 'X', careers_url: 'https://evil.bamboohr.com.attacker.com/careers' }) === null)
+    pass('bamboohr.detect() rejects suffix-spoofed hostnames (SSRF guard)');
+  else fail('bamboohr.detect() must NOT misdetect suffix-spoofed hostnames');
+
+  if (bamboohr.detect({ name: 'X', careers_url: 42 }) === null)
+    pass('bamboohr.detect() returns null for non-string careers_url');
+  else fail('bamboohr.detect() should treat non-string careers_url as missing');
+
+  // fetch() — reaches fetchText on the happy path, never fetchJson
+  let reachedText = false;
+  await bamboohr.fetch(
+    { name: 'TestCo', careers_url: 'https://testco.bamboohr.com/careers' },
+    {
+      fetchText: async (url) => {
+        reachedText = true;
+        if (url !== 'https://testco.bamboohr.com/jobs/embed2.php') throw new Error(`unexpected url ${url}`);
+        return '<div class="BambooHR-ATS-board"><p class="blankState">We currently have no open positions.</p></div>';
+      },
+      fetchJson: async () => { throw new Error('fetchJson should not be called'); },
+    },
+  );
+  if (reachedText) pass('bamboohr.fetch() reaches fetchText on the happy path');
+  else fail('bamboohr.fetch() did not reach fetchText');
+
+  // fetch() — unresolvable careers_url throws before any network call
+  let rejected = false;
+  try {
+    await bamboohr.fetch(
+      { name: 'X', careers_url: 'https://example.com/careers' },
+      { fetchText: async () => { throw new Error('SSRF! should not reach here'); } },
+    );
+  } catch (e) {
+    rejected = /cannot derive embed URL/.test(e.message);
+  }
+  if (rejected) pass('bamboohr.fetch() rejects non-bamboohr careers_url before fetch');
+  else fail('bamboohr.fetch() should throw cannot-derive-embed-URL for non-bamboohr URLs');
+
+  // parse() — real widget structure
+  const sampleHtml = [
+    '<div class="BambooHR-ATS-board"><h2>Open Positions</h2>',
+    '<ul class="BambooHR-ATS-Department-List"><li class="BambooHR-ATS-Department-Item">',
+    '<div class="BambooHR-ATS-Department-Header">Engineering</div>',
+    '<ul class="BambooHR-ATS-Jobs-List">',
+    '<li id="bhrPositionID_105" class="BambooHR-ATS-Jobs-Item"><a href="//acme.bamboohr.com/careers/105">Senior Software Engineer &amp; Lead</a><span class="BambooHR-ATS-Location">Chicago, IL</span></li>',
+    '<li id="bhrPositionID_104" class="BambooHR-ATS-Jobs-Item"><a href="/careers/104">Backend Engineer</a><span class="BambooHR-ATS-Location">Remote</span></li>',
+    '<li id="bhrPositionID_103" class="BambooHR-ATS-Jobs-Item"><a href="//evil.com/careers/103">Off-domain Phish</a><span class="BambooHR-ATS-Location">X</span></li>',
+    '</ul></li></ul></div>',
+  ].join('');
+
+  const jobs = parseBambooHrJobs(sampleHtml, 'Acme', 'acme');
+  if (jobs.length === 2) pass('bamboohr parse() extracts 2 valid jobs (off-domain row skipped)');
+  else fail(`bamboohr parse() returned ${jobs.length} jobs, expected 2`);
+
+  if (jobs[0] && jobs[0].title === 'Senior Software Engineer & Lead' && jobs[0].url === 'https://acme.bamboohr.com/careers/105' && jobs[0].location === 'Chicago, IL' && jobs[0].company === 'Acme')
+    pass('bamboohr parse() maps title (entities decoded), url (//→https), location, company');
+  else fail(`bamboohr parse() first job wrong: ${JSON.stringify(jobs[0])}`);
+
+  if (jobs[1] && jobs[1].url === 'https://acme.bamboohr.com/careers/104')
+    pass('bamboohr parse() resolves root-relative /careers/<id> against the subdomain');
+  else fail(`bamboohr parse() root-relative url wrong: ${JSON.stringify(jobs[1])}`);
+
+  if (!jobs.some(j => /evil\.com/.test(j.url)))
+    pass('bamboohr parse() drops off-domain job links (SSRF guard)');
+  else fail('bamboohr parse() leaked an off-domain job link');
+
+  const blank = parseBambooHrJobs('<div class="BambooHR-ATS-board"><p class="blankState">We currently have no open positions.</p></div>', 'Acme', 'acme');
+  if (blank.length === 0) pass('bamboohr parse() returns [] for the empty-board blank state');
+  else fail(`bamboohr parse() should return [] for blank state, got ${blank.length}`);
+
+  if (parseBambooHrJobs(null, 'Acme', 'acme').length === 0) pass('bamboohr parse() handles non-string input');
+  else fail('bamboohr parse() should return [] for non-string input');
+
+} catch (e) {
+  fail(`bamboohr provider tests crashed: ${e.message}`);
+}
+
 // ── 12. TRACKER REPORT LINK NORMALIZATION (#760) ────────────────
 
 console.log('\n12. Tracker report-link normalization');

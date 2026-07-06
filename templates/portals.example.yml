@@ -109,6 +109,38 @@
 #   max_age_days: 14
 #   drop_undated: false
 
+# -- Agentic ranking config (optional) --
+# These blocks are consumed by the AI agent during `/career-ops scan`, NOT by the
+# zero-token `npm run scan` (which only includes/excludes — it can't score or
+# reorder). They drive ranking boosts, grouping, and switchable strategies.
+#
+# referral_companies: roles at these companies are boosted and surfaced first in
+# a labeled "Referral opportunities" section (a referral doesn't bypass
+# eligibility filters like sponsorship/clearance).
+# referral_companies:
+#   - "Bloomberg"
+#   - "Amazon"
+#
+# location_preferences: ranking tiers (distinct from location_filter, which hard-
+# blocks). primary = highest boost, secondary = moderate, remote = boost US-remote.
+# Results are grouped by location in the output.
+# location_preferences:
+#   primary:
+#     - "Chicago, IL"
+#     - "New York, NY"
+#   secondary:
+#     - "Austin, TX"
+#   remote: true
+#
+# profiles: named search strategies, selected via `/career-ops scan <profile>`.
+# profiles:
+#   software_engineering:
+#     locations: ["Remote", "New York"]
+#     focus: ["Software Engineer", "Backend", "Platform"]
+#   ai_ml:
+#     locations: ["Remote", "San Francisco"]
+#     focus: ["Machine Learning Engineer", "AI Engineer"]
+
 # -- Title filter --
 # The scanner uses these keywords to decide if a title is relevant.
 # At least 1 positive must match AND 0 negatives must match (case-insensitive).
@@ -445,8 +477,10 @@ search_queries:
 #   ashby           jobs.ashbyhq.com/<slug>
 #   lever           jobs.lever.co/<slug>
 #   workable        apply.workable.com/<slug>
+#   workday         <tenant>.<instance>.myworkdayjobs.com/<site>
 #   smartrecruiters (careers|jobs).smartrecruiters.com/<slug>
 #   recruitee       <slug>.recruitee.com
+#   bamboohr        <company>.bamboohr.com  (zero-token via the embed2 widget)
 #
 # When the public careers URL is a branded custom domain (e.g.
 # careers.adyen.com), set `provider: smartrecruiters` explicitly to
