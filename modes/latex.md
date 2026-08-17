@@ -141,6 +141,29 @@ Write a JSON file with this structure. `build-cv-latex.mjs` handles template mer
 - Keywords distributed: first bullet of each role, skills section
 - No images, no graphics, no color in body text
 
+## One-Page Rule (same as pdf mode)
+
+`templates/cv-template.tex` is the same sb2nov lineage as the
+`mcp-overleaf-server` resume template — the same `\resume*` macros, the same
+margin adjustments, the same `\pdfgentounicode=1` ATS switch. So the same
+authoring rules apply verbatim; see **modes/pdf.md → One-Page Rule** for the
+full list. In short:
+
+- Target **4 experience entries + 3 projects, 3 sourced bullets each** (~21
+  bullets), always capped by what `cv.md` actually contains.
+- **Only reorder/rewrite/shorten/merge/drop content that exists in `cv.md`.**
+  No invented employers, projects, or figures.
+- **Do not change the preamble to buy space.** The margin and spacing
+  adjustments (`\addtolength`, the negative `\vspace` values in the macros)
+  are the design — retuning them to fit is the LaTeX equivalent of shrinking
+  the font, and it breaks visual consistency across every CV you have sent.
+- Fix overflow by trimming **evidence**, and fix a short page by **adding**
+  sourced evidence.
+
+Density is measured on the HTML/PDF path by `resume-density.mjs`; for a `.tex`
+export, check the compiled PDF's page count with `generate-latex.mjs` and apply
+the same 4/3/3 target by eye against `cv.md`.
+
 ## Keyword Injection Strategy
 
 Same ethical rules as `modes/pdf.md`:

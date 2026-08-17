@@ -36,6 +36,22 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { randomUUID } from 'node:crypto';
 import { readStyleTokens, injectThemeStyle } from './theme-style.mjs';
 
+/**
+ * cv.md text for the density floor check.
+ *
+ * Prefers an explicitly supplied `opts.cvMarkdown` (tests inject one), else
+ * reads the repo's cv.md. Returns '' when absent so the caller skips the
+ * check rather than reporting a bogus "under-filled" against an empty master.
+ */
+function cvMarkdownForDensity(opts) {
+  if (typeof opts?.cvMarkdown === 'string') return opts.cvMarkdown;
+  try {
+    return readFileSync(resolve(__dirname, 'cv.md'), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PDF_PAGE_MARGIN = '0.6in';
 
@@ -711,6 +727,38 @@ export async function renderHtmlToPdf(html, outputPath, opts = {}) {
     // Strict overflow leaves the draft on disk but stops before success logs
     // and manifest publication. Default overflow warns and continues.
     enforcePageBudget(pageCount, { maxPages, strictPages });
+
+    // Page FLOOR, the counterpart to the ceiling above. enforcePageBudget only
+    // ever complains about too much; a CV that fits because the tailoring
+    // dropped half the evidence passes it silently while printing a blank
+    // lower third. Measured against cv.md, so a candidate with two roles is
+    // never told to invent a third. Advisory by design: it reports what to add
+    // and never rewrites content or rejects the render.
+    //
+    // Imported lazily, INSIDE the guard, on purpose. A static import would
+    // make an advisory measurement a hard dependency of rendering: the
+    // page-budget suite copies generate-pdf.mjs alone into a sandbox and runs
+    // it there, so a top-level `./resume-density.mjs` turns every one of those
+    // renders into ERR_MODULE_NOT_FOUND. A check that must never fail a good
+    // render must not be able to prevent one from starting either.
+    try {
+      const {
+        parseMasterCv, measureRenderedHtml, measureDensity, formatDensityWarning,
+      } = await import('./resume-density.mjs');
+      const master = parseMasterCv(cvMarkdownForDensity(opts));
+      if (master.experience.length > 0 || master.projects.length > 0) {
+        const density = measureDensity(measureRenderedHtml(html), master);
+        const warning = formatDensityWarning(density);
+        if (warning) console.warn(warning);
+        else console.log(`📏 Density: ${density.totalBullets} bullets · ${density.experienceEntries} roles · ${density.projectEntries} projects`);
+      }
+    } catch (err) {
+      // Never fail a good render over the advisory measurement. A missing
+      // module here means "not measured", not "bad CV".
+      if (err?.code !== 'ERR_MODULE_NOT_FOUND') {
+        console.error(`⚠️  Density check skipped: ${err.message}`);
+      }
+    }
 
     console.log(`✅ PDF generated: ${outputPath}`);
     console.log(`📊 Pages: ${pageCount}`);

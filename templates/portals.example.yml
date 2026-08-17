@@ -192,6 +192,33 @@
 #   ai_ml:
 #     locations: ["Remote", "San Francisco"]
 #     focus: ["Machine Learning Engineer", "AI Engineer"]
+# -- Experience-level filter (early-career targeting, optional) --
+# Bands each posting using experience-level.mjs, which reads BOTH the title
+# (via classify-tier.mjs) and the job DESCRIPTION for a stated years
+# requirement -- so a plain "Software Engineer" whose JD says "0-2 years"
+# bands as early, and one saying "8+ years" bands as senior. Absent this
+# block, nothing is banded, ordered, or annotated.
+#
+# Bands: early | unknown | intern | mid | senior
+#
+#   - max_years   the ceiling that defines "early" (default 2)
+#   - drop_bands  OPT-IN hard skip. "unknown" is accepted but ignored: most
+#                 ATS list APIs ship no description, so unknown means "no
+#                 evidence", not "wrong level" -- dropping it would discard
+#                 most of a scan.
+#   - annotate    write a labeled `level:` segment into data/pipeline.md rows
+#                 (default true) so agent ranking can use it without
+#                 re-parsing the JD.
+#
+# Surviving offers are ORDERED early-first; nothing is dropped by ordering.
+# `title_filter.seniority_boost` acts as the within-band tiebreaker.
+#
+# experience_filter:
+#   enabled: true
+#   max_years: 2
+#   drop_bands: ["senior"]
+#   annotate: true
+
 # -- Posting-age filter (optional) --
 # Opt-in freshness gate. Skips offers whose posting date (postedAt, supplied by
 # the provider) is older than N days. Offers from providers that expose no date

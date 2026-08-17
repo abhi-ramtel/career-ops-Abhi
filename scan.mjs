@@ -48,6 +48,8 @@ import { loadProviders, resolveProvider } from './providers/_registry.mjs';
 import { mergeProviderPlugins } from './plugins/_engine.mjs';
 import { classifyFetchError } from './verify-portals.mjs';
 import { fingerprintText, findCrossListings } from './fingerprint-core.mjs';
+import { classifyExperienceLevel, compareEarlyCareerFit } from './experience-level.mjs';
+import { matchesGlobalExclusion } from './eligibility-filter.mjs';
 import { resolveColumns, parseTrackerRow, normalizeTextKey } from './tracker-parse.mjs';
 import { normalizeCompany } from './tracker-utils.mjs';
 import { normalizeCompanyName } from './invite-match.mjs';
@@ -170,54 +172,6 @@ export function buildTitleFilter(titleFilter) {
     const hasNegative = negative.some(m => m(lower));
     return hasPositive && !hasNegative;
   };
-}
-
-const GLOBAL_EXCLUSION_PATTERNS = [
-  // -- Visa sponsorship --
-  /we are unable to offer sponsorship for this role/i,
-  /unable to offer sponsorship/i,
-  /no visa sponsorship/i,
-  /no sponsorship/i,
-  /will not sponsor/i,
-  /won'?t sponsor/i,
-  /cannot sponsor/i,
-  /without visa support or sponsorship/i,
-  // -- Work authorization / eligibility --
-  // Patterns require the requirement context ("must"/"required"/"active"/
-  // "ability to obtain") so a passing mention ("no clearance needed") doesn't
-  // trigger a false exclusion. Targets candidates on F-1/OPT who need future
-  // sponsorship and cannot hold a US security clearance.
-  /requires?\s+(?:active\s+|current\s+|an?\s+)*(?:us\s+|u\.s\.\s+)?security clearance/i,
-  /active\s+(?:ts\/sci|top[- ]secret|secret|public trust)\s+clearance/i,
-  /(?:ability|able)\s+to\s+obtain\s+(?:a\s+|an\s+)?(?:us\s+)?(?:security\s+)?clearance/i,
-  /must\s+(?:be\s+(?:a\s+)?(?:us|u\.s\.)\s+citizen|hold\s+(?:us|u\.s\.)\s+citizenship)/i,
-  /(?:us|u\.s\.)\s+citizenship\s+(?:is\s+)?required/i,
-  /must\s+be\s+(?:a\s+)?(?:us|u\.s\.)\s+person/i,
-];
-
-function gatherJobText(job) {
-  return [
-    job?.title,
-    job?.company,
-    job?.location,
-    job?.description,
-    job?.text,
-    job?.snippet,
-    job?.summary,
-    job?.details,
-    job?.body,
-    job?.content,
-    job?.descriptionPlain,
-    job?.descriptionHtml,
-  ]
-    .filter(value => typeof value === 'string' && value.trim() !== '')
-    .join('\n');
-}
-
-function matchesGlobalExclusion(job) {
-  const text = gatherJobText(job);
-  if (!text) return false;
-  return GLOBAL_EXCLUSION_PATTERNS.some(pattern => pattern.test(text));
 }
 
 // Compiled-matcher cache for matchedTitleKeywords(), keyed by the
@@ -753,6 +707,67 @@ export function buildVisaFilter(visaFilter) {
     if (!requireMention) return true;
     if (positive.length === 0) return true;
     return positive.some(k => lower.includes(k));
+  };
+}
+
+// ── Experience-level filter (early-career targeting) ────────────────
+// Optional. If `experience_filter` is absent (or `enabled: false`), every job
+// passes and nothing is annotated.
+//
+// This is a PREFERENCE mechanism first and a filter second. `skip_tiers`
+// already drops on classifyTier's title-only verdict; that is deliberately
+// blunt, and on its own it cannot express "0-2 years preferred" because a
+// plain "Software Engineer" title carries no level marker at all. So this
+// block bands each posting with experience-level.mjs (title + description +
+// classifyTier) and then:
+//
+//   - `drop_bands`  — hard skip, opt-in and empty by default. Never includes
+//     'unknown': most ATS list payloads ship no description, so unknown is
+//     "no evidence", and dropping it would silently discard the majority of a
+//     scan.
+//   - ordering      — surviving offers are sorted best-fit-first, so an
+//     early-career role outranks an unbanded one even when both pass.
+//   - annotation    — the band rides into pipeline.md as a labeled `level:`
+//     segment, so the agent-side ranking and rank-pipeline.mjs can use it
+//     without re-parsing anything.
+//
+// Config shape (portals.yml):
+//   experience_filter:
+//     enabled: true
+//     max_years: 2            # the ceiling that defines "early"
+//     drop_bands: ["senior"]  # optional hard skip
+//     annotate: true          # write `level:` into pipeline rows (default true)
+
+export function buildExperienceFilter(experienceFilter) {
+  const off = { enabled: false, classify: () => null, shouldDrop: () => false, annotate: false };
+  if (!experienceFilter || experienceFilter.enabled === false) return off;
+
+  const maxYears = Number.isFinite(Number(experienceFilter.max_years))
+    && Number(experienceFilter.max_years) >= 0
+    ? Number(experienceFilter.max_years)
+    : 2;
+
+  const dropBands = new Set(
+    (Array.isArray(experienceFilter.drop_bands) ? experienceFilter.drop_bands : [])
+      .filter(b => typeof b === 'string')
+      .map(b => b.trim().toLowerCase())
+      // 'unknown' means "no evidence either way" — refusing to drop it here is
+      // what keeps a description-less provider (most of them) usable at all.
+      .filter(b => b !== 'unknown'),
+  );
+
+  const annotate = experienceFilter.annotate !== false;
+
+  return {
+    enabled: true,
+    maxYears,
+    annotate,
+    classify: (job) => classifyExperienceLevel({
+      title: job?.title ?? '',
+      description: typeof job?.description === 'string' ? job.description : '',
+      maxYears,
+    }),
+    shouldDrop: (banded) => Boolean(banded) && dropBands.has(banded.band),
   };
 }
 
@@ -1863,6 +1878,20 @@ export function formatPipelineOffer(offer) {
   // posted:, before note:, for a stable serialization.
   const trust = formatTrustSegment(offer);
   if (trust) line = `${line} | ${trust}`;
+  // Labeled experience-band segment. Rides like posted:/trust:/note: so it
+  // never disturbs the positional 1/3/4/5-column contract in modes/pipeline.md,
+  // and is emitted only when experience_filter actually banded the offer —
+  // an unbanded scan produces byte-identical rows to before. Carries the
+  // stated years when the JD had them, since "early (0-2y)" is the part a
+  // human skimming the inbox actually wants.
+  const band = typeof offer.experienceBand === 'string' ? offer.experienceBand : '';
+  if (band) {
+    const y = offer.experienceYears;
+    const yearsNote = y && (y.min != null || y.max != null)
+      ? ` ${y.min ?? 0}-${y.max ?? '+'}y`
+      : '';
+    line = `${line} | ${sanitizeMarkdownField(`level: ${band}${yearsNote}`)}`;
+  }
   // Optional free-text ranking signal (e.g. a curated-list flag an importer
   // attaches). Labeled — not positional like location/compensation — so it can
   // ride on any row shape (bare URL, 3-, 4-, or 5-column) without a reader
@@ -2536,6 +2565,7 @@ async function main() {
   const countryEligibilityFilter = buildCountryEligibilityFilter(config.country_eligibility_filter, candidateCountry);
   const visaFilter = buildVisaFilter(config.visa_filter);
   const visaEnabled = Boolean(config.visa_filter) && config.visa_filter.enabled !== false;
+  const experienceFilter = buildExperienceFilter(config.experience_filter);
 
   // 3. Resolve a provider for each enabled company / board
   const targets = [];
@@ -2626,6 +2656,8 @@ async function main() {
   let totalFilteredBlacklist = 0;
   let annotatedBlacklisted = 0;
   let totalFilteredVisa = 0;
+  let totalFilteredExperience = 0;
+  const experienceBandCounts = Object.create(null);
   let totalDupes = 0;
   const newOffers = [];
   const errors = [...resolveErrors];
@@ -2772,6 +2804,20 @@ async function main() {
           totalFilteredVisa++;
           continue;
         }
+        // Banded last among the content filters: it is the only one that
+        // annotates rather than merely accepting/rejecting, so there is no
+        // point computing it for a job an earlier filter already dropped.
+        if (experienceFilter.enabled) {
+          const banded = experienceFilter.classify(job);
+          if (experienceFilter.shouldDrop(banded)) {
+            totalFilteredExperience++;
+            continue;
+          }
+          job.experienceBand = banded.band;
+          job.experienceYears = banded.years;
+          job.experienceSignals = banded.signals;
+          experienceBandCounts[banded.band] = (experienceBandCounts[banded.band] || 0) + 1;
+        }
         const dedupUrl = normalizeUrlForDedup(job.url);
         if (seenUrls.has(dedupUrl)) {
           totalDupes++;
@@ -2803,6 +2849,14 @@ async function main() {
           source: sourceName,
           tracked: Boolean(careersUrlDomain),
           careersUrlDomain,
+          // Carried from the portals.yml entry so the ranking pass and the
+          // pipeline row can see the company's visa history without re-reading
+          // config. Undefined for companies with no recorded history, which is
+          // the common case and must stay neutral rather than negative.
+          companySponsorship: company?.sponsorship && typeof company.sponsorship === 'object'
+            ? company.sponsorship
+            : undefined,
+          companyFortune500: company?.fortune500 === true || undefined,
         });
       }
     } catch (err) {
@@ -2848,6 +2902,59 @@ async function main() {
   // scan-history.tsv yet at this point in the run (all writes happen below),
   // so this sees the same bytes a re-read would — minus the third full parse.
   const crossListings = findCrossListings(verifiedOffers, dedupSnapshot.fingerprintHistory);
+
+  // 5.8. Early-career ordering. Sorted only for WRITE order — nothing is
+  // dropped here, and a scan with experience_filter off is byte-identical to
+  // before. Array.prototype.sort is stable in Node, so offers sharing a band
+  // keep their discovery order (company order in portals.yml), which is what
+  // makes two runs over unchanged data produce the same pipeline.md.
+  //
+  // `title_filter.seniority_boost` feeds THIS comparator as the within-band
+  // tiebreaker rather than getting its own pass. It had been validated by
+  // validate-portals.mjs but read by nothing since it was introduced — a knob
+  // the config documented and the scanner ignored. Folding it in here revives
+  // it without creating a second ordering mechanism to keep in sync.
+  const boostKeywords = (Array.isArray(config.title_filter?.seniority_boost)
+    ? config.title_filter.seniority_boost : [])
+    .filter(k => typeof k === 'string' && k.trim())
+    .map(k => k.trim().toLowerCase());
+  const boosted = (title) => {
+    if (boostKeywords.length === 0) return 0;
+    const t = String(title || '').toLowerCase();
+    return boostKeywords.some(k => t.includes(k)) ? 1 : 0;
+  };
+
+  // Company-level sponsorship history, from the tracked_companies entry the
+  // offer came from. This is a RANKING signal only and deliberately ranks
+  // BELOW the experience band: a senior role at a known sponsor is still a
+  // senior role. It is emphatically not a promise about this posting —
+  // "company historically sponsors H-1B" != "this job sponsors H-1B" — so the
+  // per-job visa/eligibility filters above already had the final say, and a
+  // posting that failed them never reaches this sort.
+  const SPONSOR_RANK = { likely: 2, historical: 1, unknown: 0 };
+  const sponsorWeight = (offer) => {
+    const status = offer?.companySponsorship?.status;
+    return typeof status === 'string' ? (SPONSOR_RANK[status.toLowerCase()] ?? 0) : 0;
+  };
+
+  const rankingActive = experienceFilter.enabled
+    || boostKeywords.length > 0
+    || verifiedOffers.some(o => o.companySponsorship);
+
+  if (rankingActive && verifiedOffers.length > 1) {
+    verifiedOffers.sort((a, b) => {
+      if (experienceFilter.enabled) {
+        const byBand = compareEarlyCareerFit(
+          { band: a.experienceBand },
+          { band: b.experienceBand },
+        );
+        if (byBand !== 0) return byBand;
+      }
+      const bySponsor = sponsorWeight(b) - sponsorWeight(a);
+      if (bySponsor !== 0) return bySponsor;
+      return boosted(b.title) - boosted(a.title);
+    });
+  }
 
   // 6. Write results
   if (!dryRun && verifiedOffers.length > 0) {
@@ -2939,6 +3046,14 @@ async function main() {
   }
   if (visaEnabled) {
     console.log(`Filtered by visa:      ${totalFilteredVisa} removed`);
+  }
+  if (experienceFilter.enabled) {
+    console.log(`Filtered by experience: ${totalFilteredExperience} removed`);
+    const bands = ['early', 'unknown', 'intern', 'mid', 'senior']
+      .filter(b => experienceBandCounts[b])
+      .map(b => `${b} ${experienceBandCounts[b]}`)
+      .join(' · ');
+    if (bands) console.log(`Experience bands:      ${bands} (≤${experienceFilter.maxYears}y = early)`);
   }
   if (Object.keys(windows).length > 0 || totalFilteredCooldown > 0) {
     console.log(`Filtered by cooldown:  ${totalFilteredCooldown} removed`);
