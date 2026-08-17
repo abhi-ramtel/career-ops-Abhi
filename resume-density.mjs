@@ -125,7 +125,7 @@ export function measureRenderedHtml(html) {
     const chunk = html.slice(start.at, end);
     const bullets = (chunk.match(/<li\b/g) || []).length;
     const nameMatch = chunk.match(/class="(?:job-company|project-title)"[^>]*>([\s\S]*?)</);
-    const name = nameMatch ? nameMatch[1].replace(/<[^>]*>/g, '').trim() : `${start.kind} ${i + 1}`;
+    const name = nameMatch ? stripTags(nameMatch[1]).trim() : `${start.kind} ${i + 1}`;
     totalBullets += bullets;
     entries.push({ kind: start.kind, name, bullets });
   });
@@ -136,6 +136,29 @@ export function measureRenderedHtml(html) {
     totalBullets,
     entries,
   };
+}
+
+/**
+ * Remove HTML tags, repeatedly, until the result stops changing.
+ *
+ * A single `.replace(/<[^>]*>/g, '')` pass is not enough: deleting one match
+ * can splice its neighbours into a NEW tag, so `<<span>span>` survives one
+ * pass as `<span>` (CodeQL js/incomplete-multi-character-sanitization). The
+ * extracted value here only reaches console output and the cv.md name lookup,
+ * never rendered HTML, but an incomplete strip is still wrong: a mangled name
+ * silently fails to match its master entry and the CV gets reported as thin.
+ *
+ * Iterating to a fixed point terminates because every pass that changes the
+ * string strictly shortens it.
+ */
+export function stripTags(value) {
+  let out = String(value ?? '');
+  let previous;
+  do {
+    previous = out;
+    out = out.replace(/<[^>]*>/g, '');
+  } while (out !== previous);
+  return out;
 }
 
 /** Sum of the top `entries` bullet counts, each capped at `perEntry`. */
@@ -322,6 +345,29 @@ Jan 2025 - Present
   ok('extracts entry names', r.entries[0].name === 'Engineer A' && r.entries[4].name === 'Proj One');
   ok('bullets are attributed to the right block', r.entries[3].bullets === 2);
   ok('empty html is safe', measureRenderedHtml('').totalBullets === 0);
+
+  ok('stripTags removes a plain tag', stripTags('a<b>c') === 'ac');
+  ok('stripTags removes wrapping markup', stripTags('<span class="x">Acme Inc</span>') === 'Acme Inc');
+  ok('stripTags leaves plain text alone', stripTags('Acme & Co') === 'Acme & Co');
+  ok('stripTags is safe on null/undefined', stripTags(undefined) === '');
+  // The loop exists so the strip is guaranteed to reach a FIXED POINT rather
+  // than depending on one pass being enough. Re-running it must be a no-op on
+  // any input, including malformed markup that leaves stray delimiters behind.
+  ok('stripTags is idempotent on every shape tried',
+    ['a<b>c', '<<span>span>Acme', '<<<b>b>b>X', '<b>Acme</b>', 'plain', '<unclosed']
+      .every(s => stripTags(stripTags(s)) === stripTags(s)));
+  ok('stripTags never throws on malformed markup',
+    (() => { try { stripTags('<<<>>>'); stripTags('<'); return true; } catch { return false; } })());
+  // The real shapes templates/sections/*.html emit: COMPANY is a plain
+  // substitution, and a project's optional badge is a SIBLING of the name
+  // inside .project-title. Stopping at the first '<' is therefore right — it
+  // takes the name and leaves the badge out of it.
+  ok('a project name excludes its sibling badge span',
+    measureRenderedHtml('<div class="project"><div class="project-title">Dots<span class="project-badge">1st</span></div><ul><li>x</li></ul></div>')
+      .entries[0].name === 'Dots');
+  ok('a company name with an ampersand survives intact',
+    measureRenderedHtml('<div class="job"><span class="job-company">Deere &amp; Company</span><ul><li>x</li></ul></div>')
+      .entries[0].name === 'Deere &amp; Company');
 
   console.log('\n━━━ measureDensity ━━━');
   const dFull = measureDensity(r, master);
