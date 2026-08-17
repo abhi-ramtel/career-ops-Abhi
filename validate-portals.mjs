@@ -395,7 +395,19 @@ async function main() {
   if (result.errors.length > 0) process.exit(1);
 }
 
-main().catch((err) => {
-  console.error(`validate-portals failed: ${err.message}`);
-  process.exit(1);
-});
+// Run the CLI only when invoked directly. Without this guard, `import
+// { validatePortalsConfig } from './validate-portals.mjs'` also RAN main(),
+// which resolves portals.yml and calls process.exit(1) when it is missing —
+// killing the importing process. Locally that went unnoticed because
+// portals.yml exists (main() just printed a stray summary line); in CI, where
+// portals.yml is a gitignored user-layer file, any test importing this module
+// died instantly. Every other executable module here already guards this way.
+const isDirect = process.argv[1]
+  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+
+if (isDirect) {
+  main().catch((err) => {
+    console.error(`validate-portals failed: ${err.message}`);
+    process.exit(1);
+  });
+}
