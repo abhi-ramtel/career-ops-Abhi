@@ -165,6 +165,18 @@ export function parseCompanyInput(rawYaml, cliNames = []) {
     else if (raw.workday !== undefined && raw.workday !== null && raw.workday !== '') {
       warnings.push(`${origin}: ignored "workday" hint for "${name}" — expected a URL string or {tenant, site} object`);
     }
+    // Sourcing metadata, carried verbatim to the written portals.yml entry.
+    // `fortune500` is a plain flag; `sponsorship` records the company's visa
+    // HISTORY (status/visa_types/evidence/last_verified). Neither affects
+    // whether a board resolves — they exist so the scan can rank a company
+    // with a sponsorship track record above one with none, while the per-job
+    // eligibility filters still decide any individual posting.
+    if (raw.fortune500 === true) entry.fortune500 = true;
+    if (raw.sponsorship && typeof raw.sponsorship === 'object' && !Array.isArray(raw.sponsorship)) {
+      entry.sponsorship = raw.sponsorship;
+    } else if (raw.sponsorship !== undefined && raw.sponsorship !== null) {
+      warnings.push(`${origin}: ignored "sponsorship" for "${name}" — expected an object with status/visa_types/evidence`);
+    }
     byName.set(key, entry);
   };
 
@@ -303,8 +315,23 @@ export function buildWorkdayCandidates(coords) {
  * @returns {string}
  */
 export function yamlScalar(value) {
+  // An unquoted YAML date (`2026-08-17`) loads as a JS Date, and String(Date)
+  // is the local-timezone long form ("Sun Aug 16 2026 19:00:00 GMT-0500…").
+  // Round-tripping that back into YAML corrupts the field, so normalize any
+  // Date to its ISO calendar date before the generic scalar handling.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `"${value.toISOString().slice(0, 10)}"`;
+  }
   const s = String(value ?? '');
-  const needsQuote = s === '' || /^[\s]|[\s]$/.test(s) || /[:#"'{}\[\],&*!|>%@`]/.test(s);
+  // A bare YYYY-MM-DD is a YAML timestamp, not a string: emitting
+  // `last_verified: 2026-08-17` unquoted means the value loads back as a Date
+  // and fails a string check on the very next read. Same trap for YAML 1.1's
+  // bareword booleans (yes/no/on/off) and anything number-shaped, so quote
+  // those too rather than fixing only the case that happened to bite.
+  const yamlCoerces = /^\d{4}-\d{2}-\d{2}([T ]|$)/.test(s)
+    || /^(y|n|yes|no|on|off|true|false|null|~)$/i.test(s)
+    || /^[+-]?(\d[\d_]*)(\.\d*)?([eE][+-]?\d+)?$/.test(s);
+  const needsQuote = s === '' || /^[\s]|[\s]$/.test(s) || /[:#"'{}\[\],&*!|>%@`]/.test(s) || yamlCoerces;
   if (!needsQuote) return s;
   return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
@@ -326,8 +353,38 @@ export function renderPortalEntry(match) {
   if (match.api) lines.push(`    api: ${match.api}`);
   if (match.provider) lines.push(`    provider: ${match.provider}`);
   lines.push(`    enabled: true`);
+  if (match.fortune500 === true) lines.push(`    fortune500: true`);
+  // Sponsorship evidence is COMPANY-level history, never a promise about an
+  // individual posting — the per-job visa/eligibility filters still decide
+  // that. It is written here so the scan can rank a company with a track
+  // record above one with none, and so the evidence is auditable later.
+  if (match.sponsorship && typeof match.sponsorship === 'object') {
+    const s = match.sponsorship;
+    lines.push(`    sponsorship:`);
+    if (s.status) lines.push(`      status: ${yamlScalar(s.status)}`);
+    if (Array.isArray(s.visa_types) && s.visa_types.length > 0) {
+      lines.push(`      visa_types: [${s.visa_types.map(v => yamlScalar(v)).join(', ')}]`);
+    }
+    if (s.evidence) lines.push(`      evidence: ${yamlScalar(s.evidence)}`);
+    if (s.last_verified) lines.push(`      last_verified: ${yamlScalar(s.last_verified)}`);
+  }
   if (match.notes) lines.push(`    notes: ${yamlScalar(match.notes)}`);
   return '\n' + lines.join('\n') + '\n';
+}
+
+/**
+ * Copy sourcing metadata from an input company onto a discovery result.
+ * Returns the object unchanged when there is nothing to carry, so entries
+ * from a plain company list serialize exactly as they did before.
+ */
+export function withCompanyMeta(entry, company) {
+  if (!entry || !company) return entry;
+  const out = entry;
+  if (company.fortune500 === true) out.fortune500 = true;
+  if (company.sponsorship && typeof company.sponsorship === 'object') {
+    out.sponsorship = company.sponsorship;
+  }
+  return out;
 }
 
 /** Normalize a careers_url/api for dedupe comparison: lowercase, strip trailing slash. */
@@ -585,10 +642,16 @@ export async function runDiscovery(companies, { vendors = VENDOR_ORDER, ctx, con
   });
   const resolved = [];
   const unresolved = [];
-  for (const r of results) {
-    if (r?.resolved) resolved.push(r.resolved);
-    else if (r?.unresolved) unresolved.push(r.unresolved);
-  }
+  results.forEach((r, idx) => {
+    // Carry the input's sourcing metadata (fortune500 / sponsorship) onto the
+    // resolved entry. Done HERE rather than inside each resolveCompany branch
+    // because this is the single point where a result is still paired with the
+    // company that produced it — the vendor branches each build their own
+    // `resolved` shape, and threading it through all of them would be four
+    // copies of the same two lines.
+    if (r?.resolved) resolved.push(withCompanyMeta(r.resolved, companies[idx]));
+    else if (r?.unresolved) unresolved.push(withCompanyMeta(r.unresolved, companies[idx]));
+  });
   return { resolved, unresolved };
 }
 

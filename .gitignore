@@ -31,6 +31,12 @@ batch/tracker-additions/**/*.tsv
 jds/*
 !jds/.gitkeep
 
+# web/data/ mirrors the same rule as data/: applications.db is generated at
+# runtime by the web UI (and by `npm test` in web/), and it holds the same
+# personal application rows the tracker does. Untracked upstream but not
+# ignored, so it shows up as a candidate to commit after any web test run.
+web/data/
+
 # Personal documents — never commit scans or copies of these (PII).
 # Catches common identity/credential filenames so they can't be staged by accident.
 *passport*

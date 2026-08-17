@@ -191,6 +191,41 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     }
   }
 
+  if (config.experience_filter !== undefined) {
+    if (!isObject(config.experience_filter)) {
+      add(errors, 'experience_filter', 'experience_filter must be an object');
+    } else {
+      const ef = config.experience_filter;
+      if (ef.enabled !== undefined && typeof ef.enabled !== 'boolean') {
+        add(errors, 'experience_filter.enabled', 'must be a boolean when set');
+      }
+      if (ef.annotate !== undefined && typeof ef.annotate !== 'boolean') {
+        add(errors, 'experience_filter.annotate', 'must be a boolean when set');
+      }
+      if (ef.max_years !== undefined
+        && (!Number.isFinite(Number(ef.max_years)) || Number(ef.max_years) < 0)) {
+        add(errors, 'experience_filter.max_years', 'max_years must be a non-negative number when set');
+      }
+      if (ef.drop_bands !== undefined) {
+        if (!Array.isArray(ef.drop_bands)) {
+          add(errors, 'experience_filter.drop_bands', 'drop_bands must be an array when set');
+        } else {
+          const known = new Set(['intern', 'early', 'mid', 'senior', 'unknown']);
+          for (const band of ef.drop_bands) {
+            if (typeof band !== 'string' || !known.has(band.trim().toLowerCase())) {
+              add(errors, 'experience_filter.drop_bands', `unknown band ${JSON.stringify(band)} — use intern/early/mid/senior`);
+            } else if (band.trim().toLowerCase() === 'unknown') {
+              // Accepted by the schema but ignored at runtime, so warn rather
+              // than fail: most providers ship no description, so 'unknown' is
+              // "no evidence", and dropping it would discard most of a scan.
+              add(warnings, 'experience_filter.drop_bands', "'unknown' is ignored — it means 'no description evidence', not 'wrong level'");
+            }
+          }
+        }
+      }
+    }
+  }
+
   if (config.visa_filter !== undefined) {
     if (!isObject(config.visa_filter)) {
       add(errors, 'visa_filter', 'visa_filter must be an object');
@@ -248,6 +283,44 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       }
 
       validateParser(company.parser, `${base}.parser`, errors);
+
+      if (company.fortune500 !== undefined && typeof company.fortune500 !== 'boolean') {
+        add(errors, `${base}.fortune500`, 'fortune500 must be a boolean when set');
+      }
+
+      // Company-level visa HISTORY. Ranking input only — never a claim that a
+      // given posting sponsors, which the per-job filters decide. "guaranteed"
+      // is rejected outright rather than warned about: the whole contract of
+      // this field is that it cannot promise anything about an individual req.
+      if (company.sponsorship !== undefined) {
+        if (!isObject(company.sponsorship)) {
+          add(errors, `${base}.sponsorship`, 'sponsorship must be an object with status/visa_types/evidence');
+        } else {
+          const s = company.sponsorship;
+          const allowed = new Set(['likely', 'historical', 'unknown']);
+          if (s.status !== undefined) {
+            if (typeof s.status !== 'string' || !allowed.has(s.status.trim().toLowerCase())) {
+              add(errors, `${base}.sponsorship.status`, `status must be one of likely/historical/unknown (got ${JSON.stringify(s.status)})`);
+            }
+          }
+          if (s.visa_types !== undefined) {
+            validateKeywordList(s.visa_types, `${base}.sponsorship.visa_types`, errors);
+          }
+          if (s.evidence !== undefined && typeof s.evidence !== 'string') {
+            add(errors, `${base}.sponsorship.evidence`, 'evidence must be a string when set');
+          }
+          if (s.last_verified !== undefined) {
+            const raw = s.last_verified instanceof Date
+              ? s.last_verified.toISOString().slice(0, 10)
+              : String(s.last_verified);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+              add(errors, `${base}.sponsorship.last_verified`, 'last_verified must be a YYYY-MM-DD date when set');
+            } else if (!s.evidence) {
+              add(warnings, `${base}.sponsorship`, 'last_verified is set but evidence is empty — an unsourced date is not verification');
+            }
+          }
+        }
+      }
     }
   }
 

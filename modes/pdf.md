@@ -68,6 +68,54 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 - Distributed JD keywords: Summary (top 5), first bullet of each role, Skills section
 - No hidden text, keyword stuffing, or white-font tricks. Optimize for parseability plus human review.
 
+## One-Page Rule — fill the page, don't shrink it
+
+The CV must fit **exactly one page**, and it must FILL that page. Both halves
+are enforced by `generate-pdf.mjs`:
+
+| Direction | Mechanism | Signal |
+|---|---|---|
+| Too long | `enforcePageBudget` (`--max-pages`, default 2 → use `--max-pages=1`) | `⚠️ CV is N pages` |
+| Too long, fixable | `--fit-pages=1` shrinks the render until it fits | `🔍 Auto-fit` |
+| Too short | `resume-density.mjs` measures the render against `cv.md` | `⚠️ PAGE IS UNDER-FILLED` |
+
+**Target density** — begin with **4 experience entries** and **3 projects**,
+each carrying **3 sourced bullets** (~21 bullets) whenever `cv.md` has that
+much evidence. Targets are capped by what `cv.md` actually supports: with two
+roles on file, two roles is complete, not thin.
+
+Rules, in priority order:
+
+1. **Truthfulness beats keyword matching.** Only reorder, rewrite, shorten,
+   merge, or drop content that already exists in `cv.md`. Never invent an
+   employer, a project, a metric, or a number that is not in the source.
+2. **Preserve the strongest, most relevant evidence** and lead with measurable
+   impact.
+3. **Do not drop a role or project merely because it is not the single best
+   match.** Dropping content is how a CV ends up one page with a blank lower
+   third.
+4. **Only trim after an actual render reports overflow.** Do not pre-emptively
+   cut because the CV "looks like it might" spill.
+5. **Never solve overflow by shrinking the font or margins to an unreadable
+   size.** The template's type scale and margins are fixed design; `--fit-pages`
+   scales only down to a readable floor (~0.68) and then reports honestly
+   rather than lying about the fit. Add or cut *evidence*, not point size.
+6. **If the render reports `PAGE IS UNDER-FILLED`**, add sourced detail or
+   another relevant entry from `cv.md` and render again.
+7. **Keep skill category labels and items close to `cv.md`.** Do not invent
+   JD-derived skill labels.
+8. **Always validate the final rendered document**, not the draft: page count
+   and density both come from the real PDF/HTML, never from an estimate.
+
+Check a render directly with:
+
+```bash
+node resume-density.mjs output/cv-company-role.html
+```
+
+*(Ported from `mcp-overleaf-server`, which is the source of truth for these
+formatting rules; `resume-density.mjs` is the adapted implementation.)*
+
 ## Recruiter Review Gates
 
 - The summary should answer: "What role is this person targeting, and why this one?"
