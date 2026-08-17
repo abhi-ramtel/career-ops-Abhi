@@ -4,19 +4,40 @@
  * generate-pdf.mjs — HTML → PDF via Playwright
  *
  * Usage:
- *   node career-ops/generate-pdf.mjs <input.html> <output.pdf> [--format=letter|a4]
+ *   node career-ops/generate-pdf.mjs <input.html> <output.pdf> [--format=letter|a4] [--report=NNN] [--allow-reorder] [--max-pages=N] [--strict-pages] [--fit-pages=N]
+ *
+ * --report links the generated PDF to its tracker/report number and records
+ * the linkage in data/pdf-index.tsv so downstream tools (e.g. the TUI
+ * dashboard's `d`/`D` hotkeys) can locate the exact PDF for an application.
+ * Without --report a manifest row is still written, just unkeyed.
+ *
+ * --allow-reorder downgrades the CV section-order guard from a thrown error
+ * to a console warning, for JDs where the section order was deliberately
+ * tailored (e.g. Projects moved ahead of Education for a technical-heavy
+ * role) rather than accidentally scrambled by an agent. Without this flag,
+ * any divergence from cv.md's section order still fails generation.
+ *
+ * --max-pages=N sets the preferred rendered CV length (default: 2 pages).
+ * --fit-pages=N progressively shrinks the render until it fits N pages
+ * (opt-in, off by default). Unlike --max-pages it changes what is rendered.
+ * The actual page count is checked after Chromium writes the PDF; overflow
+ * warns with trimming guidance by default. --strict-pages turns that warning
+ * into a hard rejection without publishing the render as successful.
  *
  * Requires: @playwright/test (or playwright) installed.
  * Uses Chromium headless to render the HTML and produce a clean, ATS-parseable PDF.
  */
 
 import { chromium } from 'playwright';
-import { resolve, dirname, relative, isAbsolute } from 'path';
+import { resolve, dirname, relative, sep, isAbsolute } from 'path';
 import { readFile } from 'fs/promises';
-import { mkdirSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { randomUUID } from 'node:crypto';
+import { readStyleTokens, injectThemeStyle } from './theme-style.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const PDF_PAGE_MARGIN = '0.6in';
 
 // Ensure output directory exists (fresh setup)
 mkdirSync(resolve(__dirname, 'output'), { recursive: true });
@@ -84,11 +105,44 @@ function normalizeTextForATS(html) {
     // wrong for half of users \u2014 better to leave the glyph than emit bad data.
     t = t.replace(/\u20AC/g, () => { bump('euro', 1); return 'EUR '; });
     t = t.replace(/\u00A3/g, () => { bump('pound', 1); return 'GBP '; });
+    // Markdown bold from tailored CV builders (SUMMARY_TEXT uses **…**).
+    t = t.replace(/\*\*([^*]+?)\*\*/g, (_, inner) => {
+      bump('markdown-bold', 1);
+      return `<strong>${inner}</strong>`;
+    });
     return t;
   }
 }
 
+/**
+ * Strip diacritics so a heading is recognized regardless of how it was typed.
+ *
+ * Rendered Polish headings are not always spelled with their diacritics —
+ * "Wykształcenie" and "Wyksztalcenie" both occur in already-generated CVs.
+ * NFD splits most Polish letters into a base plus a combining mark we drop;
+ * ł (U+0142) has no canonical decomposition, so it needs its own pass.
+ *
+ * Only used for alias lookup — display titles keep their diacritics.
+ */
+function foldDiacritics(text) {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ł/g, 'l');
+}
+
+/**
+ * Heading spelling -> canonical section key.
+ *
+ * Polish (modes/pl) is here because without these aliases the rendered Polish
+ * titles match nothing derived from the English cv.md: validateCvSectionOrder()
+ * finds fewer than two comparable sections and silently returns, leaving the
+ * section-order guard disabled on every CV rendered in that mode.
+ *
+ * Keys are folded on construction so authored diacritics match stripped input.
+ */
 const SECTION_ALIASES = new Map([
+  // English — cv.md is the source of truth and is written in English.
   ['summary', 'summary'],
   ['professional summary', 'summary'],
   ['competencies', 'competencies'],
@@ -102,9 +156,42 @@ const SECTION_ALIASES = new Map([
   ['education', 'education'],
   // ['education & certifications', 'education'],
   // ['certifications', 'certifications'],
+  ['awards', 'awards'],
+  ['honors', 'awards'],
+  ['honours', 'awards'],
+  ['awards & honors', 'awards'],
+  ['awards and honors', 'awards'],
+  ['honors & awards', 'awards'],
+  ['awards & honours', 'awards'],
   ['skills', 'skills'],
   ['technical skills', 'skills'],
-]);
+  // Polish — the vocabulary documented in modes/pl/README.md, plus the word-order
+  // variants that turn up in practice (both "Kompetencje kluczowe" and
+  // "Kluczowe kompetencje" are used for the same section).
+  ['podsumowanie', 'summary'],
+  ['podsumowanie zawodowe', 'summary'],
+  ['profil zawodowy', 'summary'],
+  ['kompetencje', 'competencies'],
+  ['kompetencje kluczowe', 'competencies'],
+  ['kluczowe kompetencje', 'competencies'],
+  ['doświadczenie', 'experience'],
+  ['doświadczenie zawodowe', 'experience'],
+  ['przebieg kariery', 'experience'],
+  ['projekty', 'projects'],
+  ['kluczowe projekty', 'projects'],
+  ['wybrane projekty', 'projects'],
+  ['wykształcenie', 'education'],
+  ['edukacja', 'education'],
+  ['wykształcenie i certyfikaty', 'education'],
+  ['certyfikaty', 'certifications'],
+  ['certyfikaty i szkolenia', 'certifications'],
+  ['szkolenia i certyfikaty', 'certifications'],
+  ['nagrody', 'awards'],
+  ['wyróżnienia', 'awards'],
+  ['nagrody i wyróżnienia', 'awards'],
+  ['umiejętności', 'skills'],
+  ['umiejętności techniczne', 'skills'],
+].map(([alias, key]) => [foldDiacritics(alias), key]));
 
 function normalizeSectionTitle(text) {
   return text
@@ -118,7 +205,7 @@ function normalizeSectionTitle(text) {
 }
 
 function sectionKey(text) {
-  const normalized = normalizeSectionTitle(text);
+  const normalized = foldDiacritics(normalizeSectionTitle(text));
   return SECTION_ALIASES.get(normalized) ?? normalized;
 }
 
@@ -149,7 +236,16 @@ function extractSourceSectionOrder(markdown) {
   return sections;
 }
 
-function validateCvSectionOrder(html, cvMarkdown) {
+/**
+ * @param {string} html
+ * @param {string} cvMarkdown
+ * @param {{ allowReorder?: boolean }} [options] - `allowReorder` downgrades a
+ *   detected divergence from a thrown error to a console warning, for JDs
+ *   where the section order was deliberately tailored (e.g. Projects moved
+ *   ahead of Education for a technical-heavy role) rather than accidentally
+ *   scrambled by an agent. See #1646.
+ */
+export function validateCvSectionOrder(html, cvMarkdown, { allowReorder = false } = {}) {
   const rendered = extractRenderedSectionOrder(html);
   const source = extractSourceSectionOrder(cvMarkdown);
   if (rendered.length < 2 || source.length < 2) return;
@@ -167,20 +263,195 @@ function validateCvSectionOrder(html, cvMarkdown) {
         .filter(section => renderedComparable.some(renderedSection => renderedSection.key === section.key))
         .map(section => section.title)
         .join(' -> ');
-      throw new Error(`CV section order diverges from cv.md: rendered ${renderedOrder}; cv.md ${sourceOrder}`);
+      const message = `CV section order diverges from cv.md: rendered ${renderedOrder}; cv.md ${sourceOrder}`;
+      if (allowReorder) {
+        console.warn(`⚠️  ${message} (proceeding — --allow-reorder set)`);
+        return;
+      }
+      throw new Error(message);
     }
   }
 }
 
+/**
+ * Decide whether a rendered CV fits its configured page budget.
+ *
+ * This is deliberately separate from rendering: page count comes from the
+ * PDF Chromium actually produced, and the renderer never changes layout to
+ * force content under the limit.
+ *
+ * @param {number} pageCount - Actual pages in the rendered PDF.
+ * @param {{ maxPages?: number, strictPages?: boolean }} [options]
+ * @returns {void}
+ */
+export function enforcePageBudget(pageCount, { maxPages = 2, strictPages = false } = {}) {
+  if (!Number.isInteger(pageCount) || pageCount < 1) {
+    throw new Error(`Could not determine the rendered PDF page count (received ${pageCount}).`);
+  }
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new Error(`Invalid page budget "${maxPages}". Use a positive integer.`);
+  }
+  if (pageCount <= maxPages) return;
+
+  const actualLabel = 'pages';
+  const allowedLabel = maxPages === 1 ? 'page' : 'pages';
+  const message =
+    `CV is ${pageCount} ${actualLabel}; the allowed maximum is ${maxPages} ${allowedLabel}. ` +
+    'Trim lower-priority bullets, older roles, secondary projects, or the competencies strip, then regenerate.';
+
+  if (strictPages) {
+    throw new Error(`${message} (--strict-pages requested)`);
+  }
+
+  console.warn(`⚠️  ${message} Continuing because overflow is warning-only by default; use --strict-pages to reject it.`);
+}
+
+/**
+ * Read the page count from the PDF catalog's root /Pages dictionary.
+ *
+ * Following the catalog reference keeps page-like text in content streams or
+ * metadata from being mistaken for an actual page object.
+ *
+ * @param {Buffer} pdfBuffer - PDF bytes returned by Chromium.
+ * @returns {number}
+ */
+function countRenderedPdfPages(pdfBuffer) {
+  const pdf = pdfBuffer.toString('latin1');
+  const objects = new Map();
+  const objectPattern = /(?:^|[\r\n])(\d+)\s+(\d+)\s+obj\b([\s\S]*?)\bendobj\b/g;
+
+  for (const match of pdf.matchAll(objectPattern)) {
+    const streamIndex = match[3].search(/\bstream(?:\r?\n|\r)/);
+    const dictionary = streamIndex === -1 ? match[3] : match[3].slice(0, streamIndex);
+    objects.set(`${match[1]} ${match[2]}`, dictionary);
+  }
+
+  const catalog = [...objects.values()].find((body) => /\/Type\s*\/Catalog\b/.test(body));
+  const pagesRef = catalog?.match(/\/Pages\s+(\d+)\s+(\d+)\s+R\b/);
+  const pages = pagesRef ? objects.get(`${pagesRef[1]} ${pagesRef[2]}`) : null;
+  const count = pages && /\/Type\s*\/Pages\b/.test(pages)
+    ? pages.match(/\/Count\s+(\d+)\b/)
+    : null;
+  const pageCount = count ? Number(count[1]) : 0;
+
+  if (!Number.isInteger(pageCount) || pageCount < 1) {
+    throw new Error('Could not determine the rendered PDF page count from its page tree.');
+  }
+  return pageCount;
+}
+
+/**
+ * Convert a path to a repo-relative manifest entry, or blank if it is unknown
+ * or outside the career-ops repository.
+ *
+ * @param {string} pathValue - Absolute or cwd-relative filesystem path.
+ * @returns {string} Repo-relative path using forward slashes, or an empty string.
+ */
+export function repoRelativeManifestPath(pathValue) {
+  if (!pathValue) return '';
+  const rel = relative(__dirname, resolve(pathValue));
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return '';
+  return rel.split(sep).join('/');
+}
+
+export function injectPrintPageCss(html, format = 'a4') {
+  const normalizedFormat = String(format || 'a4').toLowerCase();
+  const pageSize = normalizedFormat === 'letter' ? 'Letter' : 'A4';
+  // Read --page-margin (set by the template's own :root default, and overridden
+  // by injectThemeStyle's block when style.margin is configured) instead of
+  // hardcoding PDF_PAGE_MARGIN outright — this @page rule is injected last, so a
+  // hardcoded value would silently win the cascade and make style.margin
+  // ineffective (#1837 review). PDF_PAGE_MARGIN is only the fallback for a
+  // template that never declares --page-margin at all.
+  const pageStyle = `<style id="career-ops-page-setup">\n@page { size: ${pageSize}; margin: var(--page-margin, ${PDF_PAGE_MARGIN}); }\n</style>`;
+
+  if (/<\/head>/i.test(html)) {
+    // Replacer function, matching the <html> branch just below. `pageStyle`
+    // interpolates only internal constants today, so this is hardening rather
+    // than a live bug — but the two branches sat in one function disagreeing
+    // about it, and the safe spelling is the one that stays correct if a
+    // configurable value is ever interpolated here (#2596).
+    return html.replace(/<\/head>/i, () => `${pageStyle}\n</head>`);
+  }
+
+  if (/<html\b[^>]*>/i.test(html)) {
+    return html.replace(/<html\b[^>]*>/i, match => `${match}\n<head>\n${pageStyle}\n</head>`);
+  }
+
+  return `${pageStyle}\n${html}`;
+}
+
+/**
+ * Record a generated PDF in data/pdf-index.tsv so tools can map a tracker
+ * report number to the exact PDF (and its source HTML for regeneration).
+ *
+ * Columns: report \t pdf \t html \t format \t date — paths relative to the
+ * career-ops root with forward slashes. One row per PDF path; when a report
+ * number is given, older rows for that report are dropped too (regenerated
+ * CVs supersede stale entries). The file is gitignored: it references
+ * gitignored output/ artifacts and is meaningless on another machine.
+ */
+function updatePDFManifest(reportNum, pdfPath, htmlPath, format) {
+  const manifestPath = resolve(__dirname, 'data', 'pdf-index.tsv');
+  const toRel = (p) => relative(__dirname, p).split(sep).join('/');
+  const relPDF = toRel(pdfPath);
+  const relHTML = repoRelativeManifestPath(htmlPath);
+  const date = new Date().toISOString().slice(0, 10);
+  // "008" and "8" are the same report — zero-padded report-link form vs
+  // unpadded tracker-# form. Normalize so replacement rows match.
+  const normKey = (s) => (s || '').trim().replace(/^0+(?=\d)/, '');
+
+  let lines = [];
+  if (existsSync(manifestPath)) {
+    lines = readFileSync(manifestPath, 'utf-8').split('\n').filter((line) => {
+      if (!line.trim() || line.startsWith('#')) return false;
+      const fields = line.split('\t');
+      if (fields[1] === relPDF) return false;
+      if (reportNum && normKey(fields[0]) === normKey(reportNum)) return false;
+      return true;
+    });
+  }
+
+  lines.push([reportNum || '', relPDF, relHTML, format, date].join('\t'));
+
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(
+    manifestPath,
+    '# report\tpdf\thtml\tformat\tdate — written by generate-pdf.mjs, do not edit\n' +
+      lines.join('\n') + '\n'
+  );
+  return relPDF;
+}
+
+/**
+ * CLI entrypoint that reads an HTML file, applies ATS-safe normalization, and
+ * renders the PDF while preserving report/source metadata for the manifest.
+ *
+ * @returns {Promise<{outputPath: string, pageCount: number, size: number}>}
+ */
 async function generatePDF() {
   const args = process.argv.slice(2);
 
   // Parse arguments
-  let inputPath, outputPath, format = 'a4';
+  let inputPath, outputPath, format = 'a4', reportNum = '', allowReorder = false;
+  let maxPages = 2, maxPagesInput = '2', strictPages = false;
+  let fitPages = null, fitPagesInput = '';
 
   for (const arg of args) {
     if (arg.startsWith('--format=')) {
       format = arg.split('=')[1].toLowerCase();
+    } else if (arg.startsWith('--report=')) {
+      reportNum = arg.split('=')[1].trim();
+    } else if (arg.startsWith('--max-pages=')) {
+      maxPagesInput = arg.slice('--max-pages='.length);
+      maxPages = Number(maxPagesInput);
+    } else if (arg.startsWith('--fit-pages=')) {
+      fitPagesInput = arg.slice('--fit-pages='.length);
+      fitPages = Number(fitPagesInput);
+    } else if (arg === '--allow-reorder') {
+      allowReorder = true;
+    } else if (arg === '--strict-pages') {
+      strictPages = true;
     } else if (!inputPath) {
       inputPath = arg;
     } else if (!outputPath) {
@@ -189,12 +460,44 @@ async function generatePDF() {
   }
 
   if (!inputPath || !outputPath) {
-    console.error('Usage: node generate-pdf.mjs <input.html> <output.pdf> [--format=letter|a4]');
+    console.error('Usage: node generate-pdf.mjs <input.html> <output.pdf> [--format=letter|a4] [--report=NNN] [--allow-reorder] [--max-pages=N] [--strict-pages] [--fit-pages=N]');
+    console.error('');
+    console.error('This script only converts an already-built HTML file to PDF.');
+    console.error('The input HTML is produced by the pdf mode: the agent fills cv-template.html');
+    console.error('with content tailored to the specific job (see modes/pdf.md) — there is no');
+    console.error('mechanical markdown-to-HTML step by design. Run `/career-ops pdf` in your AI');
+    console.error('CLI to drive the full flow end to end.');
+    process.exit(1);
+  }
+
+  if (reportNum && !/^\d+$/.test(reportNum)) {
+    console.error(`Invalid --report "${reportNum}". Use the numeric tracker/report number, e.g. --report=018`);
+    process.exit(1);
+  }
+
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    console.error(`Invalid --max-pages "${maxPagesInput}". Use a positive integer, e.g. --max-pages=1 or --max-pages=2.`);
+    process.exit(1);
+  }
+
+  if (fitPages !== null && (!Number.isInteger(fitPages) || fitPages < 1)) {
+    console.error(`Invalid --fit-pages "${fitPagesInput}". Use a positive integer, e.g. --fit-pages=1.`);
     process.exit(1);
   }
 
   inputPath = resolve(inputPath);
   outputPath = resolve(outputPath);
+
+  // Path-traversal guard: keep the PDF write inside the project directory so a
+  // crafted output argument (e.g. "../../etc/cron.d/x") can't escape the repo.
+  // Anchored to the repo root (__dirname), not process.cwd(): running the script
+  // from outside the repo used to falsely refuse in-repo outputs — and, worse,
+  // would have allowed writes anywhere under an arbitrary cwd.
+  const relOut = relative(__dirname, outputPath);
+  if (relOut === '' || relOut.startsWith('..') || isAbsolute(relOut)) {
+    console.error(`Refusing to write the PDF outside the project directory: ${outputPath}`);
+    process.exit(1);
+  }
 
   // Validate format
   const validFormats = ['a4', 'letter'];
@@ -206,6 +509,8 @@ async function generatePDF() {
   console.log(`📄 Input:  ${inputPath}`);
   console.log(`📁 Output: ${outputPath}`);
   console.log(`📏 Format: ${format.toUpperCase()}`);
+  console.log(`📐 Page budget: ${maxPages}${strictPages ? ' (strict)' : ' (warning only)'}`);
+  if (fitPages !== null) console.log(`🔍 Auto-fit: shrinking to fit ${fitPages} page${fitPages === 1 ? '' : 's'}`);
 
   let html = await readFile(inputPath, 'utf-8');
   let cvMarkdown = '';
@@ -214,7 +519,7 @@ async function generatePDF() {
   } catch (err) {
     if (err?.code !== 'ENOENT') throw err;
   }
-  validateCvSectionOrder(html, cvMarkdown);
+  validateCvSectionOrder(html, cvMarkdown, { allowReorder });
 
   // Normalize text for ATS compatibility (issue #1)
   const normalized = normalizeTextForATS(html);
@@ -225,7 +530,15 @@ async function generatePDF() {
     console.log(`🧹 ATS normalization: ${totalReplacements} replacements (${breakdown})`);
   }
 
-  return renderHtmlToPdf(html, outputPath, { format, baseDir: dirname(inputPath) });
+  return renderHtmlToPdf(html, outputPath, {
+    format,
+    baseDir: dirname(inputPath),
+    reportNum,
+    inputPath,
+    maxPages,
+    strictPages,
+    fitPages,
+  });
 }
 
 /**
@@ -271,92 +584,163 @@ export async function inlineLocalFonts(html) {
 /**
  * Render an HTML string to a PDF file via headless Chromium.
  *
+ * Writes the HTML to a temporary file in the baseDir and loads it via
+ * page.goto() to give the page a file:// origin. This allows relative
+ * resources (images, fonts) to load — setContent() runs from about:blank
+ * and Chromium blocks file:// subresource loads from non-file origins.
+ *
  * Local url('./fonts/...') references are inlined as data: URLs first so
- * fonts render regardless of page origin (see inlineLocalFonts).
+ * fonts also survive the ATS normalization pass (which may strip font refs).
  *
  * @param {string} html - Full HTML document to render.
  * @param {string} outputPath - Absolute path to write the PDF to.
- * @param {{format?: 'a4'|'letter', baseDir?: string}} [opts]
+ * @param {{
+ *   format?: 'a4'|'letter',
+ *   baseDir?: string,
+ *   reportNum?: string,
+ *   inputPath?: string,
+ *   maxPages?: number,
+ *   strictPages?: boolean,
+ *   fitPages?: number|null,
+ *   launchBrowser?: (options: {headless: boolean}) => Promise<import('playwright').Browser>
+ * }} [opts]
  * @returns {Promise<{outputPath: string, pageCount: number, size: number}>}
  */
 export async function renderHtmlToPdf(html, outputPath, opts = {}) {
   const format = opts.format || 'a4';
   const baseDir = opts.baseDir || process.cwd();
+  const reportNum = opts.reportNum || '';
+  const inputPath = opts.inputPath || '';
 
   mkdirSync(dirname(outputPath), { recursive: true });
 
+  // Inject the user's theme tokens (config/profile.yml `style:`) as CSS custom
+  // properties so the templates' var(--x, <default>) reads pick them up (#1837).
+  // No `style:` block → no tokens → byte-identical output. Both the CV path and
+  // the cover-letter path flow through here, so both are themed from one place.
+  const styleTokens = opts.styleTokens ?? readStyleTokens();
+  html = injectThemeStyle(html, styleTokens);
+
+  html = injectPrintPageCss(html, format);
   html = await inlineLocalFonts(html);
 
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
+  // Write HTML to a temp file in baseDir so page.goto() gives a file://
+  // origin that can load local images, fonts, and other resources.
+  const tmpHtmlPath = resolve(baseDir, `.career-ops-render-${randomUUID()}.html`);
+  const { writeFile, unlink } = await import('fs/promises');
+  await writeFile(tmpHtmlPath, html, 'utf-8');
 
-    // Set content with file base URL for any relative resources
-    await page.setContent(html, {
+  const launchBrowser = opts.launchBrowser || ((options) => chromium.launch(options));
+  let browser = null;
+  try {
+    browser = await launchBrowser({ headless: true });
+    // A CV is static markup, so the renderer needs neither scripts nor the network.
+    // Both are denied because this HTML is not fully trusted: it is built from
+    // cv.md, the job posting and the evaluation report, and postings are untrusted
+    // input (AGENTS.md). With JS off an injected <script> cannot run; with
+    // non-local requests aborted an injected <img src="https://…"> cannot beacon
+    // out. file:/data: subresources still load, which is all a template needs.
+    //
+    // newContext(), not newPage(): javaScriptEnabled is a Playwright context
+    // option with no per-page equivalent. Guarded so an injected test double that
+    // only implements newPage() still works.
+    const context = browser.newContext
+      ? await browser.newContext({ javaScriptEnabled: false })
+      : null;
+    const page = context ? await context.newPage() : await browser.newPage();
+    if (page.route) {
+      await page.route('**/*', (route) => {
+        const url = route.request().url();
+        return url.startsWith('file:') || url.startsWith('data:')
+          ? route.continue()
+          : route.abort();
+      });
+    }
+
+    // Load from file:// so the page origin allows local subresources
+    await page.goto(pathToFileURL(tmpHtmlPath).href, {
       waitUntil: 'load',
-      baseURL: `${pathToFileURL(baseDir).href}/`,
     });
 
-    // Wait for fonts to load
+    // Wait for fonts and images to settle
     await page.evaluate(() => document.fonts.ready);
 
-    // Try to generate a one-page PDF by progressively scaling down until it fits
-    // or a minimum scale is reached. This keeps the change local and non-breaking.
-    const { writeFile } = await import('fs/promises');
+    const maxPages = opts.maxPages ?? 2;
+    const strictPages = opts.strictPages ?? false;
 
-    const pageCountFromBuffer = (buffer) => {
-      try {
-        const s = buffer.toString('latin1');
-        return (s.match(/\/Type\s*\/Page[^s]/g) || []).length;
-      } catch (e) {
-        return 0;
-      }
-    };
+    // --fit-pages=N (opt-in): progressively shrink the render until it fits N
+    // pages, so a CV that runs a few lines long is pulled back in instead of
+    // spilling. Deliberately NOT wired to --max-pages: that flag is a
+    // post-render verdict, and changing it must never change the bytes we
+    // render. Off by default; --fit-pages=1 gives the one-page ATS CV.
+    //
+    // Scale floor is ~0.68 — below that the type stops being reliably
+    // readable (and ATS text extraction starts degrading). If even the
+    // smallest scale overflows, the last attempt is what gets written and
+    // enforcePageBudget still has the final say.
+    const fitPages = Number.isInteger(opts.fitPages) && opts.fitPages > 0 ? opts.fitPages : null;
+    const scales = fitPages === null
+      ? [1]
+      : [1, 0.98, 0.96, 0.94, 0.92, 0.9, 0.88, 0.86, 0.84, 0.82, 0.8, 0.76, 0.72, 0.68];
 
-    // Candidate scales to attempt. Start at 1 and gradually shrink.
-    const scales = [1, 0.98, 0.96, 0.94, 0.92, 0.9, 0.88, 0.86, 0.84, 0.82, 0.8, 0.76, 0.72, 0.68];
-    let finalBuffer = null;
-    let finalPageCount = 0;
+    let pdfBuffer = null;
+    let pageCount = 0;
     for (const scale of scales) {
-      const pdfBuffer = await page.pdf({
-        format: format,
+      pdfBuffer = await page.pdf({
         printBackground: true,
         margin: {
-          top: '0.45in',
-          right: '0.45in',
-          bottom: '0.45in',
-          left: '0.45in',
+          top: '0',
+          right: '0',
+          bottom: '0',
+          left: '0',
         },
         preferCSSPageSize: true,
         scale,
       });
 
-      const pages = pageCountFromBuffer(pdfBuffer);
-      // Keep the latest buffer so we can write it out later.
-      finalBuffer = pdfBuffer;
-      finalPageCount = pages;
-
-      if (pages <= 1) {
-        // Found a one-page result — stop shrinking.
-        break;
-      }
+      // Root page-tree count, so page-like text in content streams is ignored.
+      pageCount = countRenderedPdfPages(pdfBuffer);
+      if (fitPages === null || pageCount <= fitPages) break;
     }
 
-    if (!finalBuffer) throw new Error('Failed to generate PDF buffer');
+    if (!pdfBuffer) throw new Error('Failed to generate PDF buffer');
 
-    await writeFile(outputPath, finalBuffer);
+    // Write PDF
+    await writeFile(outputPath, pdfBuffer);
+
+    // Strict overflow leaves the draft on disk but stops before success logs
+    // and manifest publication. Default overflow warns and continues.
+    enforcePageBudget(pageCount, { maxPages, strictPages });
 
     console.log(`✅ PDF generated: ${outputPath}`);
-    console.log(`📊 Pages: ${finalPageCount}`);
-    console.log(`📦 Size: ${(finalBuffer.length / 1024).toFixed(1)} KB`);
+    console.log(`📊 Pages: ${pageCount}`);
+    console.log(`📦 Size: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
 
-    return { outputPath, pageCount: finalPageCount, size: finalBuffer.length };
+    try {
+      updatePDFManifest(reportNum, outputPath, inputPath, format);
+      console.log(`🔗 Manifest: data/pdf-index.tsv updated${reportNum ? ` (report ${reportNum})` : ' (no --report given)'}`);
+    } catch (err) {
+      // The PDF itself succeeded — never fail the run over manifest bookkeeping.
+      console.error(`⚠️  Manifest update failed: ${err.message}`);
+    }
+
+    return { outputPath, pageCount, size: pdfBuffer.length };
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close().catch((err) => {
+        console.warn(`⚠️  Browser cleanup failed: ${err.message}`);
+      });
+    }
+    // Clean up temp file
+    await unlink(tmpHtmlPath).catch((err) => {
+      if (err?.code !== 'ENOENT') {
+        console.warn(`⚠️  Temporary HTML cleanup failed: ${err.message}`);
+      }
+    });
   }
 }
 
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (isMain) {
   generatePDF().catch((err) => {
     console.error('❌ PDF generation failed:', err.message);
@@ -364,4 +748,4 @@ if (isMain) {
   });
 }
 
-export { normalizeTextForATS };
+export { normalizeTextForATS, sectionKey };
