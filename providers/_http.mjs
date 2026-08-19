@@ -14,7 +14,17 @@ async function fetchWithTimeout(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers =
   try {
     const res = await fetch(url, {
       method,
-      headers: { 'user-agent': DEFAULT_USER_AGENT, ...headers },
+      headers: {
+        'user-agent': DEFAULT_USER_AGENT,
+        // undici (Node 22+) advertises zstd in accept-encoding by default.
+        // amazon.jobs' CDN accepts it, answers `Content-Encoding: zstd`, and
+        // then serves a RAW identity body truncated at exactly 1 KiB —
+        // res.json() dies with "Unterminated string in JSON at position 1024".
+        // Naming only gzip/deflate keeps compression intact while steering
+        // clear of a codec the edge demonstrably cannot serve.
+        'accept-encoding': 'gzip, deflate',
+        ...headers,
+      },
       body,
       redirect,
       signal: controller.signal,

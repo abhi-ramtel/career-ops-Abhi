@@ -93,6 +93,37 @@ if (isRetryableError(nonTypeErrorLookalike) === true) {
   }
 }
 
+// ── Default accept-encoding: never advertise zstd ────────────────────────────
+// undici on Node 22+ sends `accept-encoding: zstd` by default. The
+// amazon.jobs CDN accepts it, answers `Content-Encoding: zstd`, and serves a
+// raw identity body truncated at exactly 1 KiB — fetchJson() then dies with
+// "Unterminated string in JSON at position 1024" (observed live; the provider
+// has no retry to save it because the 200 looks healthy). The shared
+// transport must steer every provider clear of that codec.
+{
+  const realFetch = globalThis.fetch;
+  let seenInit = null;
+  try {
+    globalThis.fetch = async (url, init) => { seenInit = init; return new Response('{}', { status: 200 }); };
+    await fetchResponse('https://example.com/home');
+    const ae = seenInit?.headers?.['accept-encoding'] ?? '';
+    if (ae === 'gzip, deflate') pass('default accept-encoding is "gzip, deflate" (undici zstd never advertised)');
+    else fail(`default accept-encoding should be "gzip, deflate", got "${ae}"`);
+    if (!/zstd/i.test(ae)) pass('default accept-encoding does not include zstd');
+    else fail('default accept-encoding must not include zstd');
+
+    // Callers can still override (e.g. a provider that needs a specific codec).
+    await fetchResponse('https://example.com/home', { headers: { 'accept-encoding': 'identity' } });
+    const override = seenInit?.headers?.['accept-encoding'] ?? '';
+    if (override === 'identity') pass('caller-supplied accept-encoding still wins over the default');
+    else fail(`caller accept-encoding should win, got "${override}"`);
+  } catch (e) {
+    fail(`accept-encoding test threw: ${e.message}`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 // ── fetchResponse() ─────────────────────────────────────────────────────────
 // Regression: fetchResponse() previously called the internal fetchWithTimeout
 // WITHOUT its required `consume` callback, so every call threw
