@@ -143,55 +143,6 @@
 #   max: 0
 #   currency: "USD"
 
-# -- Freshness filter (optional) --
-# Drop stale postings using the provider-supplied posting date (postedAt,
-# emitted by greenhouse/ashby/lever/workday). Applied AFTER the salary filter,
-# BEFORE dedup. If this block is absent, postings are not filtered by age.
-#
-# Semantics:
-#   - max_age_days: only surface jobs posted within this many days
-#     (must be a positive number; otherwise the filter is disabled with a warning)
-#   - drop_undated: if true, also drop postings without a usable date.
-#     Default false (conservative) — most WebSearch hits and some providers
-#     don't expose a date, so they pass rather than being silently dropped.
-#   - Future-dated postings (provider clock skew) pass.
-#
-# Example: only roles posted in the last 14 days, keep undated postings
-# freshness_filter:
-#   max_age_days: 14
-#   drop_undated: false
-
-# -- Agentic ranking config (optional) --
-# These blocks are consumed by the AI agent during `/career-ops scan`, NOT by the
-# zero-token `npm run scan` (which only includes/excludes — it can't score or
-# reorder). They drive ranking boosts, grouping, and switchable strategies.
-#
-# referral_companies: roles at these companies are boosted and surfaced first in
-# a labeled "Referral opportunities" section (a referral doesn't bypass
-# eligibility filters like sponsorship/clearance).
-# referral_companies:
-#   - "Bloomberg"
-#   - "Amazon"
-#
-# location_preferences: ranking tiers (distinct from location_filter, which hard-
-# blocks). primary = highest boost, secondary = moderate, remote = boost US-remote.
-# Results are grouped by location in the output.
-# location_preferences:
-#   primary:
-#     - "Chicago, IL"
-#     - "New York, NY"
-#   secondary:
-#     - "Austin, TX"
-#   remote: true
-#
-# profiles: named search strategies, selected via `/career-ops scan <profile>`.
-# profiles:
-#   software_engineering:
-#     locations: ["Remote", "New York"]
-#     focus: ["Software Engineer", "Backend", "Platform"]
-#   ai_ml:
-#     locations: ["Remote", "San Francisco"]
-#     focus: ["Machine Learning Engineer", "AI Engineer"]
 # -- Experience-level filter (early-career targeting, optional) --
 # Bands each posting using experience-level.mjs, which reads BOTH the title
 # (via classify-tier.mjs) and the job DESCRIPTION for a stated years
@@ -218,7 +169,6 @@
 #   max_years: 2
 #   drop_bands: ["senior"]
 #   annotate: true
-
 # -- Posting-age filter (optional) --
 # Opt-in freshness gate. Skips offers whose posting date (postedAt, supplied by
 # the provider) is older than N days. Offers from providers that expose no date
@@ -425,6 +375,29 @@ title_filter:
     - "Oracle EBS"
     - "Mainframe"
     - "COBOL"
+    # -- German student / apprenticeship postings (DACH market) --
+    # Large DACH employers publish these in volume, and the German AI keywords
+    # in title_filter.positive ("KI", "Künstliche Intelligenz") match them, so
+    # without these a scan of one big employer returns mostly student ads.
+    - "Werkstudent"
+    - "Praktikant"
+    - "Praktikum"
+    - "Masterarbeit"
+    - "Bachelorarbeit"
+    - "Abschlussarbeit"
+    - "PreMaster"
+    - "Duales Studium"
+    - "Ausbildung"
+    # Qualified rather than a bare "Thesis": keywords longer than three
+    # characters match as plain substrings, so "Thesis" would also reject
+    # "Speech Synthesis Engineer" — and "Speech" is a positive keyword above.
+    - "Master Thesis"
+    - "Bachelor Thesis"
+    # -- Support roles that match on "Agent" --
+    # "Customer Care Agent" and its German equivalent otherwise pass the
+    # "AI Agent" / "Agent" side of the positive list.
+    - "Customer Care"
+    - "Kundenbetreuung"
   seniority_boost:
     # These prefixes add relevance but are not required
     - "Senior"
@@ -707,7 +680,6 @@ search_queries:
 #   ashby           jobs.ashbyhq.com/<slug>
 #   lever           jobs.(eu.)?lever.co/<slug>
 #   workable        apply.workable.com/<slug>
-#   workday         <tenant>.<instance>.myworkdayjobs.com/<site>
 #   smartrecruiters (careers|jobs).smartrecruiters.com/<slug>
 #   recruitee       <slug>.recruitee.com
 #   bamboohr        <tenant>.bamboohr.com               (or api: field)
@@ -754,7 +726,7 @@ search_queries:
 # Some providers are job boards / aggregators with no per-company careers
 # URL to detect, so they must be selected with an explicit `provider:`
 # field: 4dayweek, agentic-jobs, arbeitnow, arbeitsagentur, flowxtra, getonbrd, glints,
-# himalayas, ibm, jobicy, jobstreet, justjoin, landingjobs, nofluffjobs, remoteok, remotive,
+# himalayas, ibm, jobicy, jobstreet, justjoin, landingjobs, nofluffjobs, remoteok, remotive, senjob,
 # manfred, thehub, vdab, weworkremotely, workingnomads, wttj, a16z-speedrun-talent. Examples for every built-in provider are below.
 
 # ── Built-in provider examples ────────────────────────────────────
@@ -1089,6 +1061,10 @@ search_queries:
 #   provider: manfred
 #   lang: EN                              # EN or ES; the API rejects the call without it
 #   enabled: true
+#
+# - name: Senjob                          # Senegal (Dakar) — the first African board
+#   provider: senjob                      # listings only; robots.txt keeps CVs off-limits
+#   enabled: true                         # ~40 postings/page, tech roles are a thin slice
 #
 # - name: Hacker News "Who is hiring?"    # monthly "Ask HN: Who is hiring?" thread
 #   provider: hackernews
@@ -2010,6 +1986,37 @@ tracked_companies:
     scan_method: websearch
     scan_query: '"n11" careers "Software Engineer" OR "Backend" OR "Frontend" OR "Yazılım"'
     notes: "Istanbul. E-commerce marketplace (Doğuş Group)."
+    enabled: false
+
+  # -- Africa (employers on already-supported ATS) --
+  #
+  # The scanner ships 74 providers and a regional section for the UK, the
+  # Nordics, Iberia, Türkiye and Indonesia — and none for Africa. That gap is
+  # not a missing provider: these employers already publish through Greenhouse
+  # and Ashby, whose public zero-auth APIs the scanner has always read.
+  #
+  # Every entry below was verified live on 2026-08-17: the API answered 200 and
+  # the posting locations were checked, because an African-founded company is
+  # not the same thing as a company hiring in Africa. The note on each says what
+  # it actually posts, so nobody enables one expecting a market it does not
+  # serve. Left `enabled: false` like every other example.
+
+  - name: Moniepoint
+    careers_url: https://job-boards.greenhouse.io/moniepoint
+    api: https://boards-api.greenhouse.io/v1/boards/moniepoint/jobs
+    notes: "Lagos. Fintech (business banking, payments). Verified 2026-08-17: 120 postings, the largest group in Lagos and Remote-Nigeria; also hires Remote in Bangalore, Poland and Spain."
+    enabled: false
+
+  - name: Jumia
+    careers_url: https://job-boards.greenhouse.io/jumia
+    api: https://boards-api.greenhouse.io/v1/boards/jumia/jobs
+    notes: "Pan-African e-commerce. Verified 2026-08-17: 25 postings across Nigeria, Ghana, Uganda, Egypt and Kenya — the widest continental spread of the three."
+    enabled: false
+
+  - name: Andela
+    careers_url: https://jobs.ashbyhq.com/andela
+    api: https://api.ashbyhq.com/posting-api/job-board/andela
+    notes: "African-founded talent marketplace. Verified 2026-08-17: 19 postings, but mostly North America and the UK with a single Kenya role — enable it for the company, not for African coverage."
     enabled: false
 
 # ── Job Boards ────────────────────────────────────────────────────────
