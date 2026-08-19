@@ -65,6 +65,9 @@ const tex = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'te
 // assert on the exact \href value.
 const CV_JSON = {
   name: 'Test Candidate',
+  // The template renders a Summary section and build-cv-latex.mjs requires the
+  // field — test payloads must carry one even when the test is about links.
+  summary: 'Test summary line for rendering contract checks.',
   contact_line: 'City, State',
   linkedin: { url: 'https://linkedin.com/in/test', display: 'linkedin.com/in/test' },
   github: { url: 'https://github.com/test', display: 'github.com/test' },

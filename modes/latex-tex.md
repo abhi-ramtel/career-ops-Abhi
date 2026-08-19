@@ -12,7 +12,10 @@ Opt-in mode for candidates who already maintain a hand-tuned `.tex` CV. **Does n
 | Family | Detection | Editable prose |
 |--------|-----------|----------------|
 | `resumeSubheading` | `\resumeSubheading` + `\resumeItem`/`\resumeItemWithoutTitle`/`\resumeSubItem` | `\resumeItem{...}` and `\resumeItemWithoutTitle{}{...}` bullets; `\textbf{Category}{: items}` and `\resumeSubItem{Category}{items}` skill values |
+| `roleheading` | `\roleheading` + `\bul` + `\bullist` (the main.tex-design family used by `templates/cv-template.tex`) | `\bul{...}` bullets; `\textbf{Category:} items \\` skill lines **within the Skills section only** (Education's `Coursework:`/`Honors & Activities:` lines look alike but are not editable skills) |
 | `tabularx-itemize` | `tabularx` + `itemize`, no resume macros | `\item` body text in the document body |
+
+Detection order matters: `roleheading` is checked before `tabularx-itemize`, because roleheading documents load `tabularx` and use `itemize` as well (an unpatched document would otherwise be misdetected and only its `\item` lines extracted).
 
 Extraction only reads the document body (preamble macro definitions are skipped) and ignores commented-out macro calls — old bullets kept as `%` comments never become editable slots.
 
@@ -80,5 +83,5 @@ Same as `modes/latex.md` and `modes/pdf.md`:
 
 | Mode | Input | Output |
 |------|-------|--------|
-| `latex` | `cv.md` | career-ops `templates/cv-template.tex` → `.tex` + PDF |
-| `latex-tex` | user's `resume.tex` | same template shape, tailored prose only → `.tex` + PDF |
+| `latex` | `cv.md` | career-ops `templates/cv-template.tex` (main.tex design) → `.tex` + PDF |
+| `latex-tex` | user's `resume.tex` (any supported family, incl. main.tex-style) | same template shape, tailored prose only → `.tex` + PDF |

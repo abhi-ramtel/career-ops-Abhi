@@ -47,22 +47,27 @@ Otherwise uses the same placeholder tokens (`{{NAME}}`, `{{SUMMARY_TEXT}}`, etc.
 
 ### cv-template.tex
 
-LaTeX template for Overleaf-compatible CV generation. Based on the [sb2nov/resume](https://github.com/sb2nov/resume) format. Uses placeholder tokens (`{{NAME}}`, `{{EXPERIENCE}}`, `{{PROJECTS}}`, etc.) that the LaTeX pipeline fills at generation time.
+LaTeX template for Overleaf-compatible resume generation, in the **main.tex design** (the candidate's own `data/main.tex` is the design source of truth): Charter 10.5pt, accent-colored scshape section titles, tight one-page spacing, and the `\roleheading` / `\projheading` / `\bul` macro family. Uses placeholder tokens (`{{NAME}}`, `{{SUMMARY}}`, `{{EXPERIENCE}}`, `{{PROJECTS}}`, etc.) that the LaTeX pipeline fills at generation time.
 
-**Design:** Single-column ATS-safe layout using standard CTAN packages (`fontawesome5`, `enumitem`, `hyperref`, `titlesec`). No custom fonts or external dependencies — uploads directly to Overleaf.
+**Design:** Single-column ATS-safe layout using standard CTAN packages (`charter`, `microtype`, `enumitem`, `hyperref`, `titlesec`, `xcolor`). No icons, graphics, or custom fonts — uploads directly to Overleaf. Section order: Summary, Experience, Projects, Awards & Honors, Technical Skills, Education.
 
 **Usage:**
 ```bash
-# Validate and compile .tex → .pdf (requires pdflatex on PATH)
-node generate-latex.mjs output/cv-name-company-date.tex
+# Build a tailored resume from a JSON payload (see modes/latex.md for the schema)
+node build-cv-latex.mjs /tmp/cv-candidate-company.json output/cv-candidate-company-date.tex
 
-# Or specify a custom output path
-node generate-latex.mjs output/cv-name-company-date.tex output/custom-name.pdf
+# Validate and compile .tex → .pdf (requires pdflatex on PATH)
+node generate-latex.mjs output/cv-candidate-company-date.tex
+
+# Or specify a custom output path + one-page enforcement
+node generate-latex.mjs output/cv-candidate-company-date.tex output/custom-name.pdf --max-pages=1
 ```
 
-**Prerequisites:** `pdflatex` via [MiKTeX](https://miktex.org/) (Windows) or TeX Live (Linux/macOS). First compilation may auto-install missing LaTeX packages. Alternatively, upload the `.tex` file directly to [Overleaf](https://www.overleaf.com) — no local install needed.
+**Prerequisites:** `pdflatex` via [MiKTeX](https://miktex.org/) (Windows) or TeX Live (Linux/macOS), or `tectonic`. First compilation may auto-install missing LaTeX packages. `pdftotext` (Poppler) is optional and enables the one-page underfill measurement. Alternatively, upload the `.tex` file directly to [Overleaf](https://www.overleaf.com) — no local install needed.
 
-**Customization:** Edit this file to change margins, section order, or formatting commands. The placeholder tokens are documented in `modes/latex.md` under "Template Placeholders."
+**Customization:** Edit this file to change margins, section order, or formatting commands. The placeholder tokens and macro conventions are documented in `modes/latex.md`. Custom `.tex` templates (via `cv.template` / `--template=`) must keep the `{{PLACEHOLDER}}` contract, define the `\roleheading`/`\projheading`/`\bul` macro family the builder emits, and keep the `%{4,} SECTION %{4,}` banners and the two `%%%%  END  %%%%` sentinels (see `cv-sections-core.mjs`).
+
+**The `%%%%  END  %%%%` sentinels:** Skills and Education are the two sections whose empty-strip could otherwise run into `\end{document}`. Each has its own sentinel placed immediately after its content; the Skills strip stops at the first sentinel and the Education strip at the second (non-greedy match). A template missing a sentinel fails safe: that section simply does not get stripped (a bare header when empty), never a truncated document.
 
 ### portals.example.yml
 

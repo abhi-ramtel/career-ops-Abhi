@@ -87,12 +87,12 @@ AI-powered, CLI-agnostic job search automation: pipeline tracking, offer evaluat
 | `data/assessments.tsv` | Append-only skills-assessment log (user layer, created on first `add`) |
 | `portals.yml` | Query and company config |
 | `templates/cv-template.html` | HTML template for CVs |
-| `templates/cv-template.tex` | LaTeX/Overleaf template for CVs |
+| `templates/cv-template.tex` | LaTeX/Overleaf template for CVs — main.tex design (Charter, accent sections, `\roleheading`/`\projheading`/`\bul` family), filled by `build-cv-latex.mjs` |
 | `article-digest.md` | Compact proof points from portfolio (optional) |
 | `interview-prep/story-bank.md` | Accumulated STAR+R stories |
 | `interview-prep/{company}-{role}.md` | Company-specific interview intel |
 | `generate-pdf.mjs` | Playwright: HTML to PDF |
-| `generate-latex.mjs` | LaTeX CV validator + pdflatex compiler |
+| `generate-latex.mjs` | LaTeX CV validator (accepts both the `\resume*` and `\roleheading`/`\bul` macro families) + tectonic/pdflatex compiler with page-count, `--max-pages`/`--strict-pages`, and one-page underfill (`pdftotext`) reporting |
 | `scan.mjs` | Zero-token portal scanner (Greenhouse/Ashby/Lever APIs, zero LLM cost) |
 | `scan-ats-full.mjs` | Reverse-ATS keyword-first scanner over full public ATS datasets (Greenhouse/Lever/Ashby/Workday/iCIMS), filtered by portals.yml `title_filter`/`location_filter` — no company list needed; checkpoints every 500 companies, `--resume` continues an interrupted sweep |
 | `scan-interamt.mjs` | Playwright browser scanner for Interamt.de (German public sector portal — Apache Wicket, no REST API) |

@@ -78,7 +78,15 @@ const TEX_BOUNDARY = String.raw`(?=%{4,}\s|$)`;
 // template lacking the sentinel is left untouched rather than truncated. See
 // "The Skills sentinel" above before changing these.
 const HTML_END_SENTINEL = String.raw`(?=<!--\s+END\s+-->)`;
-const TEX_END_SENTINEL = String.raw`(?=%{4,}\s+END\s+%{4,})`;
+const TEX_END_SENTINEL = String.raw`(?=\n%{4,}\s+END\s+%{4,})`;
+
+// The Skills body may not cross ANOTHER banner line. The two-sentinel template
+// (… Skills … END … Education … END …) carries a second END sentinel that
+// belongs to Education: if the Skills sentinel were missing, a `[\s\S]*?`
+// body would sail through the Education banner and stop at that sentinel,
+// deleting a live section — a destructive failure of the fail-safe. Blocking
+// any banner line in the body makes the missing-sentinel case a true no-op.
+const TEX_NO_BANNER_BODY = String.raw`((?:(?!\n%{4,})[\s\S])*)`;
 
 const PATTERNS = {
   html: {
@@ -93,7 +101,7 @@ const PATTERNS = {
     projects: new RegExp(String.raw`%{4,}\s+PROJECTS\s+%{4,}[\s\S]*?` + TEX_BOUNDARY),
     education: new RegExp(String.raw`%{4,}\s+Education\s+%{4,}[\s\S]*?` + TEX_BOUNDARY),
     awards: new RegExp(String.raw`%{4,}\s+AWARDS\s+%{4,}[\s\S]*?` + TEX_BOUNDARY),
-    skills: new RegExp(String.raw`%{4,}\s+Technical Skills\s+%{4,}[\s\S]*?` + TEX_END_SENTINEL),
+    skills: new RegExp(String.raw`%{4,}\s+Technical Skills\s+%{4,}` + TEX_NO_BANNER_BODY + TEX_END_SENTINEL),
   },
 };
 

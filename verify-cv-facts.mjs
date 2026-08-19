@@ -149,12 +149,31 @@ export function foldDigits(text) {
   // "181 users" — a claim the sources never contain, failing a truthful CV.
   // The `(?<!\d)\d{1,3}` guard keeps it to real grouping: in "in 2026 100
   // users" the left part is four digits, so nothing is joined.
-  return out.replace(/(?<!\d)(\d{1,3})[\s\u00a0\u202f](?=\d{3}(?!\d))/g, '$1');
+  out = out.replace(/(?<!\d)(\d{1,3})[\s\u00a0\u202f](?=\d{3}(?!\d))/g, '$1');
+  // The multiplication sign is multiplier NOTATION, not a different quantity:
+  // cv.md says "10× larger" and a truthful CV says "10x larger". Without the
+  // fold the two spellings yield different claim sets ("10x" + "10 datasets"
+  // on the target side, nothing on the source side) and a true statement
+  // fails the gate while an inflated "100x" is still caught (the digits
+  // differ). Applied to both sides, so it can only ever match more, never
+  // hide a fabricated number.
+  return out.replace(/\u00d7/g, 'x');
 }
 
 /** Remove HTML, basic LaTeX commands, and excess whitespace from document text. */
 export function stripMarkup(text) {
-  return foldDigits(String(text))
+  const raw = String(text);
+  // LaTeX line comments (% to end of line, skipped when escaped as \%) carry
+  // PROSE, not claims: the template's `\pdfgentounicode=1   % Ensure the
+  // generated PDF is machine readable` used to survive the command strip as
+  // "1 % …" and read as a fabricated "1 %" metric on every generated CV.
+  // Gated on \documentclass/\begin{document} because in markdown and HTML the
+  // percent sign is the literal percent of metrics ("60% throughput") and
+  // stripping there would delete real evidence from the allow-list.
+  if (/\\(documentclass|begin\{document\})/.test(raw)) {
+    text = raw.replace(/(?<!\\)%[^\n]*/g, ' ');
+  }
+  return foldDigits(text)
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, ' ')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\b[^>]*>/gi, ' ')
     // Only strip things that actually look like tags: `<name …>` or `</name>`.
@@ -171,6 +190,13 @@ export function stripMarkup(text) {
     // chain), so the two sides now normalise the same way.
     .replace(/<\/?(?:li|p|div|tr|h[1-6]|section|article|ul|ol|table|br)\b[^>\n]*>/gi, '. ')
     .replace(/<\/?[a-zA-Z][^>\n]*>/g, ' ')
+    // LaTeX spacing/geometry commands carry DIMENSIONS, not prose: the
+    // template's \vspace{-7pt} used to leak "7" into the claim stream, where
+    // "-7pt Projects" read as a fabricated "7 projects" metric on every
+    // generated .tex. Strip them whole (braced arguments included) before the
+    // general command pass, which deliberately keeps {group} content for prose
+    // commands like \textbf{...}.
+    .replace(/\\(?:vspace|hspace|addvspace|setlength|addtolength|geometry)(?:\[[^\]]*\])?(?:\{[^{}]*\})*/g, ' ')
     .replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{([^}]*)\})?/g, ' $1 ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -651,6 +677,50 @@ function runSelfTest() {
     'a unit beginning with a suffix letter is unaffected',
     [...metricClaims('Shipped 50kg servers')],
     ['50 servers']
+  );
+
+  // LaTeX-specific normalization: % comments are prose, not claims, and the
+  // ×/x spelling of a multiplier must compare equal.
+  equal(
+    'latex % comment carrying a metric is not a claim',
+    auditClaims(
+      String.raw`\documentclass{article}\begin{document} Cut cost 50% \end{document} % legacy target was 99%`,
+      String.raw`\documentclass{article}\begin{document} Cut cost 50%. \end{document}`
+    ).invented,
+    []
+  );
+  equal(
+    'a pdfgentounicode inline comment yields no phantom "1 %" claim',
+    auditClaims(
+      String.raw`\documentclass{article}\pdfgentounicode=1   % machine readable\n\begin{document}test\end{document}`,
+      String.raw`\documentclass{article}\begin{document}\end{document}`
+    ).invented,
+    []
+  );
+  equal('multiplier spellings: 10x and 10× compare equal',
+    auditClaims('enabled 10x larger datasets', 'enabled 10\u00d7 larger datasets').invented,
+    []
+  );
+  equal('an inflated multiplier is still caught after the × fold',
+    auditClaims('enabled 100x larger datasets', 'enabled 10\u00d7 larger datasets').invented,
+    ['100x', '100 datasets']
+  );
+  // The % stripping must NOT affect markdown: the percent is a literal metric
+  // unit there, and deleting it would blind the gate on both sides.
+  equal('markdown percent signs are still parsed as metrics',
+    auditClaims('Cut cost 90% in q3', 'Cut cost 50% in q2').invented,
+    ['90%']
+  );
+  // Template spacing: the template's \vspace{-7pt} before the Projects banner
+  // used to parse as "7 projects" (a count-claim: digits + modifier + metric
+  // noun), failing every generated CV.
+  equal(
+    'a template \\vspace dimension before a section title is not a claim',
+    auditClaims(
+      String.raw`\documentclass{article}\begin{document}\vspace{-7pt} \section{Projects}\end{document}`,
+      String.raw`\documentclass{article}\begin{document}\end{document}`
+    ).invented,
+    []
   );
 
   console.log(`verify-cv-facts self-test: ${passed} passed, ${failed} failed`);

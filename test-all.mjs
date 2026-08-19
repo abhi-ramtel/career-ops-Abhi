@@ -12275,6 +12275,68 @@ try {
     fail('tabularx-itemize fixture family detection failed');
   }
 
+  // roleheading family (main.tex design, the current cv-template.tex):
+  // detection must fire BEFORE the tabularx-itemize fallback (the document
+  // loads tabularx and uses itemize too), and slots must cover the \bul
+  // bullets plus the Skills-section category lines only — the same-shaped
+  // Coursework/Honors lines under Education are out of scope.
+  const roleFixture = readFileSync(join(ROOT, 'examples/latex-tex/roleheading.tex'), 'utf-8');
+
+  if (detectFamily(roleFixture) === 'roleheading') {
+    pass('roleheading fixture detected as roleheading family (not tabularx-itemize)');
+  } else {
+    fail(`roleheading fixture family detection failed (got ${detectFamily(roleFixture)})`);
+  }
+
+  const roleManifest = buildManifest('roleheading.tex', roleFixture);
+  const roleBullets = roleManifest.slots.filter(s => s.kind === 'bullet');
+  const roleSkills = roleManifest.slots.filter(s => s.kind === 'skill');
+  if (roleManifest.supported && roleBullets.length === 4 && roleSkills.length === 2) {
+    pass('roleheading manifest extracts 4 bullets + 2 skill lines (commented bullet excluded)');
+  } else {
+    fail(`roleheading slot mismatch (want 4 bullets/2 skills, got ${roleBullets.length}/${roleSkills.length}): ${JSON.stringify(roleManifest.slots.map(s => ({ id: s.id, kind: s.kind, text: s.text.slice(0, 40) })))}`);
+  }
+
+  if (roleManifest.slots.every(s => !s.text.includes('Stale commented bullet'))) {
+    pass('roleheading: commented-out \\bul lines are not extracted as slots');
+  } else {
+    fail('roleheading: a commented-out bullet leaked into slots');
+  }
+
+  if (!roleSkills.some(s => /coursework|honors/i.test(s.text))) {
+    pass('roleheading: Education Coursework/Honors lines are not treated as skills');
+  } else {
+    fail('roleheading: an Education line was extracted as a skill slot');
+  }
+
+  if (roleSkills.every(s => !/\\(textit|small|emph)/.test(s.text))) {
+    pass('roleheading: skill slots hold plain item text (no markup captured)');
+  } else {
+    fail('roleheading: a skill slot captured markup: ' + JSON.stringify(roleSkills.map(s => s.text)));
+  }
+
+  // Same round-trip discipline as the other families: patching every slot with
+  // its own text reproduces the document byte-for-byte.
+  const roleRoundTrip = applyPatches(
+    roleFixture,
+    roleManifest.slots.map(s => ({ id: s.id, text: s.text })),
+    roleManifest.slots,
+    { escape: false },
+  );
+  if (roleRoundTrip === roleFixture) {
+    pass('roleheading: no-op patch round-trip is byte-identical (spans point at prose)');
+  } else {
+    fail('roleheading: no-op patch round-trip altered the document — slot spans are misaligned');
+  }
+
+  const roleBullet = roleBullets[0];
+  const rolePatched = applyPatches(roleFixture, [{ id: roleBullet.id, text: 'Tailored roleheading bullet.' }], roleManifest.slots);
+  if (rolePatched.includes('\\bul{Tailored roleheading bullet.}')) {
+    pass('roleheading: applyPatches rewrites a \\bul bullet in place');
+  } else {
+    fail('roleheading: applyPatches did not rewrite the \\bul bullet prose');
+  }
+
   if (detectFamily('\\documentclass{article}\\begin{document}Hello\\end{document}') === null) {
     pass('unknown LaTeX layout returns null family');
   } else {

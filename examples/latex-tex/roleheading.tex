@@ -1,0 +1,124 @@
+% Fictional example CV for latex-tex tests (roleheading / main.tex-design family).
+% Mirrors the macro family of templates/cv-template.tex and data/main.tex:
+% \roleheading / \projheading / \bul bullets, \textbf{Category:} skill lines.
+\documentclass[letterpaper,10.5pt]{article}
+\usepackage{charter}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{tabularx}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{fancyhdr}
+\input{glyphtounicode}
+\pdfgentounicode=1
+
+\geometry{
+  letterpaper,
+  top=0.38in,
+  bottom=0.30in,
+  left=0.50in,
+  right=0.50in
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\definecolor{accent}{HTML}{C0392B}
+\definecolor{darkgray}{HTML}{222222}
+
+\titleformat{\section}{
+  \vspace{-6pt}\scshape\raggedright\normalsize\bfseries\color{accent}
+}{}{0em}{}[\color{darkgray}\titlerule\vspace{-4pt}]
+
+\setlength{\tabcolsep}{0in}
+\setlist[itemize]{leftmargin=*, label={}, itemsep=0pt, parsep=0pt, topsep=0pt}
+\raggedbottom
+\raggedright
+
+\newcommand{\roleheading}[4]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \textbf{#1} & \textbf{\small #2} \\
+    \textbf{\textit{\small #3}} & \textbf{\textit{\small #4}} \\
+  \end{tabular*}%
+}
+
+\newcommand{\projheading}[2]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \small #1 & \textbf{\small #2} \\
+  \end{tabular*}%
+}
+
+\newcommand{\bul}[1]{%
+  \item \small{#1}\vspace{-1pt}%
+}
+
+\newcommand{\bullist}{\begin{itemize}[leftmargin=12pt, label={\tiny$\bullet$}, topsep=1pt, itemsep=0pt, parsep=0pt]}
+\newcommand{\stopbulls}{\end{itemize}\vspace{-2.75pt}}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries Blair Sample}\\\vspace{2pt}
+  \small
+  555-0100 $|$ \href{mailto:blair@example.dev}{blair@example.dev} $|$ \href{https://github.com/blairsample}{github.com/blairsample}
+\end{center}
+\vspace{-15pt}
+
+\section{Summary}
+\vspace{-2pt}
+\small{Product-minded engineer focused on developer tools and platform reliability, with a track record of measurable latency wins.}
+\vspace{-7pt}
+
+\section{Experience}
+\vspace{-2pt}
+\roleheading{Platform Engineer}{2021 -- Present}{Example Labs}{Remote}
+\bullist
+  \bul{Operated Kubernetes clusters for internal platform teams across three regions.}
+  \bul{Introduced SLO dashboards that cut incident triage time 40\%.}
+  % \bul{Stale commented bullet that must NOT become an editable slot.}
+\stopbulls
+\vspace{3pt}
+
+\roleheading{Software Engineer}{2019 -- 2021}{Sample Corp}{Buffalo, NY}
+\bullist
+  \bul{Shipped a REST API gateway handling 1M requests/day with p99 latency under 120ms.}
+\stopbulls
+\vspace{-7pt}
+
+\section{Projects}
+\vspace{-2pt}
+\projheading{\textbf{\href{https://github.com/blairsample/demo}{Demo Tool}} $|$ \emph{TypeScript, Node.js, Redis}}{2024}
+\bullist
+  \bul{Built a job queue with exactly-once delivery and dead-letter handling.}
+\stopbulls
+\vspace{-7pt}
+
+\section{Technical Skills}
+\vspace{-2pt}
+\begin{itemize}[leftmargin=0pt, label={}, topsep=0pt, itemsep=1pt, parsep=0pt]
+  \small\item
+    \textbf{Languages:} TypeScript, Python, Go \\
+    \textbf{Infrastructure:} AWS, Terraform, Kubernetes, Grafana \\
+\end{itemize}
+\vspace{-7pt}
+
+\section{Education}
+\vspace{-2pt}
+\begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+  \textbf{State University} & \textbf{May 2019} \\
+  \textit{\small B.S. Computer Science\ $|$\ Magna Cum Laude} & \\
+\end{tabular*}
+
+\small\textbf{Coursework:} \textit{Distributed Systems, Operating Systems, Databases}\\
+
+\textbf{Honors \& Activities:} \textit{ACM Chapter -- President}
+\vspace{-7pt}
+
+\end{document}

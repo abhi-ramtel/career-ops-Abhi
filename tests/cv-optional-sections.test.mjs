@@ -173,16 +173,23 @@ for (const { file, format, after, hasCertifications, hasCompetencies } of TEMPLA
     omittedSkills.trimEnd().endsWith(closingSkeleton), true);
 
   // FAIL-SAFE: a template pack whose Skills section carries no sentinel is
-  // valid (cv-templates.mjs requires only NAME/EXPERIENCE/EDUCATION). Strip
-  // the sentinel from a real shipped template and the empty-skills strip must
-  // become a NO-OP — bare header, intact document — never a truncated tail.
+  // valid (cv-templates.mjs requires only NAME/EXPERIENCE/EDUCATION). Drop
+  // only the FIRST sentinel (String.replace) and the empty-skills strip must
+  // become a NO-OP — bare header, intact document — never a truncated tail,
+  // and never a strip that sails through to the NEXT sentinel: the shipped
+  // tex template carries two (`%% END %%` after Skills AND after Education),
+  // so a missing Skills sentinel must not stop at the Education one and
+  // delete a live section (TEX_NO_BANNER_BODY in cv-sections-core.mjs).
   // `after` IS the sentinel literal — reuse it rather than restating it here,
   // so the two can never drift into a weaker substring of each other.
+  const sentinelCount = (s) => (s.match(new RegExp(after.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
   const noSentinel = template.replace(after, '');
-  check(`${name}: fixture actually dropped the sentinel`, noSentinel.includes(after), false);
+  check(`${name}: fixture actually dropped a sentinel`, sentinelCount(noSentinel) === sentinelCount(template) - 1, true);
   const strippedNoSentinel = stripEmptySections(noSentinel, { ...FULL, skills: [] }, format);
   check(`${name}: no sentinel + empty skills leaves the template untouched (fail-safe)`,
     strippedNoSentinel === noSentinel, true);
+  check(`${name}: no sentinel + empty skills keeps the education section`,
+    strippedNoSentinel.includes(educationMarker), true);
   check(`${name}: no sentinel + empty skills keeps the closing document skeleton`,
     strippedNoSentinel.trimEnd().endsWith(closingSkeleton), true);
   check(`${name}: no sentinel + empty skills keeps {{EXPERIENCE}}`,

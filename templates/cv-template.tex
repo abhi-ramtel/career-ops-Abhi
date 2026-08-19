@@ -1,133 +1,151 @@
 %-------------------------
 % Career-Ops LaTeX CV Template
-% Based on: Gabriel Sison / sb2nov resume template
-% License: MIT
+% Design source of truth: data/main.tex (Charter 10.5pt, accent section
+% titles, \roleheading / \projheading / \bul macro family, tight spacing).
+%
+% Placeholders ({{...}}) are filled by build-cv-latex.mjs -- do not remove
+% them. cv-sections-core.mjs (stripEmptySections) strips an optional section
+% from its all-caps banner comment line to the next banner; the two END
+% sentinel lines (four percent signs, a word, four percent signs -- placed
+% after Technical Skills and after Education) stop those strips before the
+% document close. Keep the banners and both sentinels in place. Do NOT spell
+% a sentinel line or the document-close macro's name literally in this
+% header: the test suite counts their literal occurrences in this file (the
+% fail-safe fixture deletes the first END sentinel by that very search).
 %------------------------
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Random Stuff %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\documentclass[letterpaper,11pt]{article}
-\usepackage{latexsym}
-\usepackage[empty]{fullpage}
+\documentclass[letterpaper,10.5pt]{article}
+
+%---------- PACKAGES ----------
+\usepackage{charter}          % Clean serif -- more distinctive than Times
+\usepackage{microtype}        % Microtypographic refinements for tighter fit
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
 \usepackage{titlesec}
-\usepackage{marvosym}
-\usepackage[usenames,dvipsnames]{color}
-\usepackage{verbatim}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
-\usepackage{fancyhdr}
-\usepackage[english]{babel}
 \usepackage{tabularx}
-\usepackage{fontawesome}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{fancyhdr}
 \usepackage{multicol}
-\setlength{\multicolsep}{-3.0pt}
-\setlength{\columnsep}{-1pt}
+\usepackage{marvosym}
+\usepackage{latexsym}
+\usepackage{verbatim}
 \input{glyphtounicode}
-\pagestyle{fancy}
-\fancyhf{} % clear all header and footer fields
-\fancyfoot{}
-\renewcommand{\headrulewidth}{0pt}
-\renewcommand{\footrulewidth}{0pt}
-% Adjust margins
-\addtolength{\oddsidemargin}{-0.6in}
-\addtolength{\evensidemargin}{-0.5in}
-\addtolength{\textwidth}{1.19in}
-\addtolength{\topmargin}{-.7in}
-\addtolength{\textheight}{1.4in}
-\urlstyle{same}
-\raggedbottom
-\raggedright
-\setlength{\tabcolsep}{0in}
-% Sections formatting
-\titleformat{\section}{
-  \vspace{-7pt}\scshape\raggedright\large\bfseries
-}{}{0em}{}[\color{black}\titlerule \vspace{0pt}]
-% Ensure that generate pdf is machine readable/ATS parsable
+% Ensure the generated PDF is machine readable / ATS parsable (keep this line
+% comment-free: verify-cv-facts.mjs reads the source and an inline comment
+% here is what made "1 %" look like a fabricated metric).
 \pdfgentounicode=1
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Commands  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\newcommand{\resumeItem}[1]{
-  \item\small{
-    {#1 \vspace{-3pt}}
-  }
+%---------- PAGE GEOMETRY ----------
+\geometry{
+  letterpaper,
+  top=0.38in,
+  bottom=0.30in,
+  left=0.50in,
+  right=0.50in
 }
-\newcommand{\resumeSubheading}[4]{
-  \vspace{-3pt}\item
-    \begin{tabular*}{1.0\textwidth}[t]{l@{\extracolsep{\fill}}r}
-      \textbf{#1} & \textbf{\small #2} \\
-      \textit{\small#3} & \textit{\small #4} \\
-    \end{tabular*}\vspace{-7pt}
-}
-\newcommand{\resumeSubheadingContinue}[2]{
-  \vspace{-3pt}
-    \begin{tabular*}{1.0\textwidth}[t]{l@{\extracolsep{\fill}}r}
-      \textit{\small#1} & \textit{\small #2} \\
-    \end{tabular*}\vspace{-7pt}
-}
-\newcommand{\resumeProjectHeading}[2]{
-  \vspace{-3pt}\item
-    \begin{tabular*}{1.0\textwidth}[t]{l@{\extracolsep{\fill}}r}
-      \textbf{#1} & \textbf{\small #2} \\
-    \end{tabular*}\vspace{-7pt}
-}
-\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{0pt}}
-\renewcommand\labelitemi{$\vcenter{\hbox{\tiny$\bullet$}}$}
-\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
-\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.0in, label={}]}
-\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
-\newcommand{\resumeItemListStart}{\begin{itemize}}
-\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{0pt}}
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Heading  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%---------- HEADER / FOOTER ----------
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+%---------- COLORS ----------
+\definecolor{accent}{HTML}{C0392B}   % Deep red -- professional, not loud
+\definecolor{darkgray}{HTML}{222222}
+\definecolor{midgray}{HTML}{555555}
+
+%---------- SECTION FORMATTING ----------
+\titleformat{\section}{
+  \vspace{-6pt}\scshape\raggedright\normalsize\bfseries\color{accent}
+}{}{0em}{}[\color{darkgray}\titlerule\vspace{-4pt}]
+
+%---------- LIST / TABLE SETUP ----------
+\setlength{\tabcolsep}{0in}
+\setlist[itemize]{leftmargin=*, label={}, itemsep=0pt, parsep=0pt, topsep=0pt}
+\raggedbottom
+\raggedright
+
+%---------- CUSTOM COMMANDS ----------
+
+% Role header: {Title | Dates}{Organization | Location}
+\newcommand{\roleheading}[4]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \textbf{#1} & \textbf{\small #2} \\
+    \textbf{\textit{\small #3}} & \textbf{\textit{\small #4}} \\
+  \end{tabular*}%
+}
+
+% Project header: {Name | Stack}{Date}
+\newcommand{\projheading}[2]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \small #1 & \textbf{\small #2} \\
+  \end{tabular*}%
+}
+
+% Bullet
+\newcommand{\bul}[1]{%
+  \item \small{#1}\vspace{-1pt}%
+}
+
+\newcommand{\bullist}{\begin{itemize}[leftmargin=12pt, label={\tiny$\bullet$}, topsep=1pt, itemsep=0pt, parsep=0pt]}
+\newcommand{\stopbulls}{\end{itemize}\vspace{-2.75pt}}
+
+%==============================================================
 \begin{document}
-    \begin{center}
-        % NAME
-        {\Huge\scshape {{NAME}}}
-        % SUBHEADING
-        \\ {{CONTACT_LINE}}\\
-        \small
-        % EMAIL
-        % EMAIL_URL already carries its scheme: sanitizeUrl() prefixes bare
-        % addresses with mailto:, so the template must not add a second one.
-        \href{{{EMAIL_URL}}}{\raisebox{-0.2\height}\faEnvelope\  \underline{{{EMAIL_DISPLAY}}}} ~
-        % LINKEDIN
-        \href{{{LINKEDIN_URL}}}{\raisebox{-0.2\height}\faLinkedin\ \underline{{{LINKEDIN_DISPLAY}}}}  ~
-        % GITHUB
-        \href{{{GITHUB_URL}}}{\raisebox{-0.2\height}\faGithub\ \underline{{{GITHUB_DISPLAY}}}}
-    \end{center}
+%==============================================================
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Education  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{Education}
-  \resumeSubHeadingListStart
-{{EDUCATION}}
-  \resumeSubHeadingListEnd
+%---------- HEADING ----------
+\begin{center}
+  {\LARGE\bfseries {{NAME}}}\\\vspace{2pt}
+  \small
+  {{CONTACT_LINE}}
+\end{center}
+\vspace{-15pt}
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Experience  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{Work Experience}
-  \resumeSubHeadingListStart
+%---------- SUMMARY ----------
+\section{Summary}
+\vspace{-2pt}
+\small{{{SUMMARY}}}
+\vspace{-7pt}
+
+%---------- EXPERIENCE ----------
+\section{Experience}
+\vspace{-2pt}
 {{EXPERIENCE}}
-  \resumeSubHeadingListEnd
+\vspace{-7pt}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  PROJECTS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{Personal Projects}
-\resumeSubHeadingListStart
+\section{Projects}
+\vspace{-2pt}
 {{PROJECTS}}
-\resumeSubHeadingListEnd
+\vspace{-7pt}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  AWARDS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Awards \& Honors}
-\resumeSubHeadingListStart
+\vspace{-2pt}
 {{AWARDS}}
-\resumeSubHeadingListEnd
+\vspace{-7pt}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Technical Skills  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Technical Skills}
-\vspace{-7pt}
-\begin{itemize}
-[leftmargin=0.15in, label={}]\small{\item{
+\vspace{-2pt}
+\begin{itemize}[leftmargin=0pt, label={}, topsep=0pt, itemsep=1pt, parsep=0pt]
+  \small\item
 {{SKILLS}}
-}}
 \end{itemize}
+\vspace{-7pt}
+%%%%  END  %%%%
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Education  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Education}
+\vspace{-2pt}
+{{EDUCATION}}
+\vspace{-7pt}
 %%%%  END  %%%%
 
 \end{document}
