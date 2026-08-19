@@ -141,13 +141,6 @@ export function parseWorkdayResponse(json, entry) {
       url: jobBase + j.externalPath,
       company: entry.name,
       location: j.locationsText || locationFromPath(j.externalPath),
-      // Most Workday tenants omit the body from the CXS list payload; read it
-      // when present so scan.mjs's content/visa filters have signal.
-      description: typeof j.description === 'string'
-        ? j.description
-        : typeof j.jobDescription === 'string'
-          ? j.jobDescription
-          : '',
       postedAt: parsePostedOn(j.postedOn),
     });
   }

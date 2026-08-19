@@ -56,10 +56,14 @@ try {
       : fail(`numeric scalars dropped from the .tex: ${missing.map(([what, v]) => `${what} (${v})`).join(', ')}`);
 
     // The empty-field shape this produced, asserted directly: a dropped date
-    // leaves `{Corp}{}` rather than `{Corp}{2024}`.
-    /\{Corp\}\{2024\}/.test(tex)
-      ? pass('the experience subheading carries its date rather than an empty brace pair')
-      : fail(`experience subheading lost its date: ${(tex.match(/\{Corp\}\{[^}]*\}/) || ['(not found)'])[0]}`);
+    // leaves an EMPTY date brace pair in the subheading line. Checked on the
+    // line rather than by brace adjacency because the argument order differs
+    // per template family: \resumeSubheading{Company}{Date}{Location} vs the
+    // main.tex-design \roleheading{Role}{Date}{Company}{Location}.
+    const subLine = (tex.split('\n').find((l) => l.includes('{Corp}')) || '').trim();
+    subLine && subLine.includes('{2024}')
+      ? pass('the experience subheading line carries its date rather than an empty brace pair')
+      : fail(`experience subheading lost its date: ${subLine || '(no line contains {Corp})'}`);
   }
 } finally {
   rmSync(dir, { recursive: true, force: true });

@@ -28,7 +28,11 @@ const TEMPLATE_PATH = resolve(__dirname, 'templates', 'cv-template.tex');
 const PLACEHOLDER_RE = /\{\{[A-Z_]+\}\}/g;
 
 /** ATS-normalize then LaTeX-escape a piece of user text. */
-const esc = (text) => escapeLatex(normalizeForLatex(typeof text === 'string' ? text : ''));
+// No string-only guard here: normalizeForLatex/escapeLatex blank out
+// null/undefined/objects and COERCE scalars (#2641) — a pre-filter of
+// `typeof text === 'string' ? text : ''` would drop JSON numbers like
+// dates: 2024 before they ever reach the normalizer.
+const esc = (text) => escapeLatex(normalizeForLatex(text));
 
 /**
  * Dates: "Apr 2026 - Present" -> "Apr 2026 -- Present" (LaTeX en dash).

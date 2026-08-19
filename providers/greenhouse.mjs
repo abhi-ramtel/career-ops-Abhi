@@ -172,9 +172,6 @@ export default {
         url: j.absolute_url,
         company: entry.name,
         location,
-        // Greenhouse ships the full posting body in the same list payload —
-        // no extra request — which is what scan.mjs's content/visa filters read.
-        description: typeof j.content === 'string' ? j.content : '',
         postedAt: toEpochMs(j.first_published),
       };
     });
