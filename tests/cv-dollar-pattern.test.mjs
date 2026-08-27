@@ -40,8 +40,6 @@ test("build-cv-latex: a $' in a bullet does not splice the template", () => {
   const out = join(dir, 'out.tex');
   writeFileSync(payload, JSON.stringify({
     name: 'Test Candidate',
-    // Required by the current template (Summary section is always rendered).
-    summary: 'Test summary for the dollar-pattern regression.',
     contact_line: 'City',
     email: { url: 't@example.com', display: 't@example.com' },
     linkedin: { url: '', display: '' },
@@ -93,7 +91,6 @@ test('build-cv-latex: $` and $$ in a bullet survive verbatim', () => {
   const out = join(dir, 'out.tex');
   writeFileSync(payload, JSON.stringify({
     name: 'Test Candidate',
-    summary: 'Test summary for the dollar-pattern regression.',
     contact_line: 'City',
     email: { url: 't@example.com', display: 't@example.com' },
     linkedin: { url: '', display: '' },
@@ -101,7 +98,7 @@ test('build-cv-latex: $` and $$ in a bullet survive verbatim', () => {
     education: [], projects: [], awards: [], skills: [],
     experience: [{
       company: 'Test Corp', role: 'Engineer', location: 'Remote', dates: '2024',
-      // $` = the text before the match; $$ = a literal single $.
+      // $` = text before the match; $$ = a literal single $.
       bullets: ['Cut spend from $$4M using the $`legacy pipeline'],
     }],
   }));

@@ -31,16 +31,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      # web/tests/lib/*.test.mjs import core modules from the repo root
-      # (tracker-utils.mjs), and Node resolves a bare specifier like `js-yaml`
-      # relative to the IMPORTING file — i.e. against the root node_modules,
-      # not web/'s. Installing only web/ therefore fails those suites with
-      # ERR_MODULE_NOT_FOUND even though web/package.json lists js-yaml.
-      # `--ignore-scripts` skips the root Playwright browser download, which
-      # nothing in this job needs.
-      - name: Install root deps (web tests import core modules)
-        working-directory: ${{ github.workspace }}
-        run: npm ci --ignore-scripts
       - run: npm test
       - run: npx tsc --noEmit
       - run: npm run build
