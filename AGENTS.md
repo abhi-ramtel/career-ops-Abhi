@@ -94,6 +94,8 @@ AI-powered, CLI-agnostic job search automation: pipeline tracking, offer evaluat
 | `generate-pdf.mjs` | Playwright: HTML to PDF |
 | `generate-latex.mjs` | LaTeX CV validator (accepts both the `\resume*` and `\roleheading`/`\bul` macro families) + tectonic/pdflatex compiler with page-count, `--max-pages`/`--strict-pages`, and one-page underfill (`pdftotext`) reporting |
 | `scan.mjs` | Zero-token portal scanner (Greenhouse/Ashby/Lever APIs, zero LLM cost) |
+| `scan-refine.mjs` | Post-filter refinement for `scan.mjs`, driven by the `refine:` block in portals.yml. Fetches the real JD for every posting the list APIs left banded `unknown` and re-bands it (this is what actually enforces 0–2 years), caps any one company's share of a run, and drops postings whose ATS API says they're dead. Inconclusive liveness counts as alive. Zero LLM tokens |
+| `auto-apply.mjs` | Greenhouse/Ashby application prep. Pulls the posting's **real** form schema (Greenhouse `?questions=true`, Ashby `ApiJobPosting` GraphQL), auto-fills from `config/profile.yml`, answers knock-outs honestly from `eligibility:`, quarantines anti-bot challenges, and returns the questions needing the candidate's words. **No submit path** — exit 3 = needs a decision first |
 | `scan-ats-full.mjs` | Reverse-ATS keyword-first scanner over full public ATS datasets (Greenhouse/Lever/Ashby/Workday/iCIMS), filtered by portals.yml `title_filter`/`location_filter` — no company list needed; checkpoints every 500 companies, `--resume` continues an interrupted sweep |
 | `scan-interamt.mjs` | Playwright browser scanner for Interamt.de (German public sector portal — Apache Wicket, no REST API) |
 | `check-liveness.mjs` / `liveness-core.mjs` | Job posting liveness checker + shared logic (expired signals win over generic Apply text) |
@@ -284,7 +286,7 @@ Two separate axes:
 | Wants to run practice interview questions with feedback | `interview/practice` |
 | Wants to debrief after a real interview and close gaps | `interview/debrief` |
 | Wants to check if a company is safe to join (red-flag analysis) | `interview-redflag` |
-| Wants to generate CV/PDF | `pdf` |
+| Wants to generate CV/PDF | `pdf` — authoring rules in `modes/resume-authoring.md` |
 | Wants a hiring-manager's read on a tailored CV before sending | `pdf --hm-audit` — opt-in pass (`modes/pdf/hm-audit.md`), off by default: researches the likely reviewer, dispatches a separate agent role-playing them, and returns a bullet-by-bullet keep/cut/rewrite verdict |
 | Wants the LaTeX/Overleaf CV path | `latex` |
 | Maintains their own hand-tuned `.tex` CV and wants it tailored in place (opt-in; cv.md stays the default) | `latex-tex` |
@@ -294,7 +296,7 @@ Two separate axes:
 | Evaluates a course/cert | `training` |
 | Evaluates portfolio project | `project` |
 | Asks about application status | `tracker` |
-| Fills out application form | `apply` |
+| Fills out application form | `apply` — for Greenhouse/Ashby start with `node auto-apply.mjs --url <posting>`; it returns the real form schema, auto-fills from profile.yml, and never submits |
 | Searches for new offers | `scan` |
 | Processes pending URLs | `pipeline` |
 | Wants a fast first-pass filter before full evaluation | `triage` |

@@ -1,5 +1,8 @@
 # Mode: pdf — ATS-Optimized PDF Generation
 
+> **Authoring rules:** `modes/resume-authoring.md` is the canonical source for truthfulness/provenance, the fill-the-page density targets, skills discipline, and template selection. Read it before generating content.
+
+
 Optional pass:
 - **`--hm-audit`:** `/career-ops pdf --hm-audit` adds the hiring-manager audit at Step 20 — an adversarial read of the tailored CV by a separate, research-grounded reviewer before it becomes a PDF (`modes/pdf/hm-audit.md`). Off by default: it costs a subagent dispatch plus web research. Turn it on per run with the flag, or for every run in your own `modes/_custom.md`.
 

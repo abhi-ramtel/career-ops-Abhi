@@ -421,6 +421,16 @@ export function repoRelativeManifestPath(pathValue) {
   return rel.split(sep).join('/');
 }
 
+/**
+ * Alias of {@link repoRelativeManifestPath}.
+ *
+ * "Workspace" is the name the rest of the artifact tooling uses for the same
+ * root this resolves against, so both spellings are exported rather than
+ * leaving callers to guess which one this module happens to use. They are the
+ * same function by construction — not two implementations to keep in sync.
+ */
+export const workspaceRelativeManifestPath = repoRelativeManifestPath;
+
 export function injectPrintPageCss(html, format = 'a4') {
   const normalizedFormat = String(format || 'a4').toLowerCase();
   const pageSize = normalizedFormat === 'letter' ? 'Letter' : 'A4';

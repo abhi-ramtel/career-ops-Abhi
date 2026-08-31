@@ -104,9 +104,62 @@ const CONCURRENCY = 10;
 // longer matches "Coordinator", "SDR" no longer matches anything mid-word, etc.
 // Multi-word phrases and keywords containing non-letters (".NET", "SAP ",
 // "L&D") keep fast, permissive substring matching.
+// A title keyword may opt in to boundary anchoring with a `word:` or `stem:`
+// prefix (#3103). Without it, a negative `intern` rejected "Internal Tools
+// Engineer" and "International Sales Manager", and a positive `solana` matched
+// "Genomic Breeder (Solanaceae)" — silent in both directions, because the scan
+// summary reports one "filtered by title" count that cannot distinguish a
+// well-tuned filter from a leaking one.
+//
+//   intern        plain substring   — matches "Intern", "Internal", "International"
+//   stem:intern   left edge only    — matches "Intern", "Internal", "International"
+//                                     but not "agent" inside "Reagents"
+//   word:intern   both edges        — matches "Intern" alone
+//
+// Lookarounds over `\p{L}\p{N}_` rather than `\b`, under the `u` flag.
+//
+// "/" and "-" must count as boundaries so "Intern/Co-op" matches, while a digit
+// or underscore must NOT, so "intern2" and "intern_" do not. `\b` gets both of
+// those right by accident but is defined over ASCII word characters only, so it
+// treats an accented letter as a boundary: `\bvp\b` matches "prévp" and
+// `\bintern\b` matches "préintern" / "internée". Job titles carry accents
+// routinely, and every one of those is a silent false match.
+//
+// `\p{L}` also keeps the lookarounds correct when the keyword itself begins or
+// ends with punctuation (".net"), which is the same reason compileLocationKeyword
+// uses lookarounds instead of `\b`.
+const TITLE_EDGE = String.raw`[\p{L}\p{N}_]`;
+
+function compilePrefixedTitleKeyword(mode, term) {
+  // A bare `word:` / `stem:` is a typo. Match NOTHING rather than everything —
+  // an empty pattern in a negative list would veto every title in the scan.
+  if (!term) return () => false;
+  // The escape set deliberately omits `-`: `\-` is an invalid identity escape
+  // under the `u` flag, and a bare `-` outside a character class is literal.
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const edge = new RegExp(TITLE_EDGE, 'u');
+  const startsWord = edge.test(term[0]);
+  const endsWord = edge.test(term[term.length - 1]);
+  const prefix = startsWord ? `(?<!${TITLE_EDGE})` : '';
+  // stem: anchors the left edge only, so it deliberately omits the suffix.
+  const suffix = mode === 'word' && endsWord ? `(?!${TITLE_EDGE})` : '';
+  const re = new RegExp(`${prefix}${escaped}${suffix}`, 'u');
+  return (lower) => re.test(lower);
+}
+
 export function compileKeyword(kw) {
+  // A non-string entry (a YAML number, list, or map) must not reach .match()
+  // or .includes(). It matches nothing rather than crashing the whole scan on
+  // one malformed config line.
+  if (typeof kw !== 'string') return () => false;
+  const prefixed = kw.match(/^(word|stem):(.*)$/);
+  if (prefixed) return compilePrefixedTitleKeyword(prefixed[1], prefixed[2].trim());
+  // Unprefixed behaviour is unchanged in intent: a 2-3 letter acronym ("AI",
+  // "ML", "VP") is boundary-anchored because it is always wrong inside another
+  // word in a title; everything else stays a plain substring. The anchoring
+  // now uses the same Unicode-aware edges, so "VP" no longer matches "prévp".
   if (/^[a-z]{2,3}$/.test(kw)) {
-    const re = new RegExp(`\\b${kw}\\b`);
+    const re = new RegExp(`(?<!${TITLE_EDGE})${kw}(?!${TITLE_EDGE})`, 'u');
     return (lower) => re.test(lower);
   }
   return (lower) => lower.includes(kw);
@@ -167,7 +220,12 @@ export function buildTitleFilter(titleFilter) {
   const negative = normalize(titleFilter?.negative, compileKeyword);
 
   return (title) => {
-    const lower = (title || '').toLowerCase();
+    // String(title ?? '') rather than (title || ''): a provider that ships a
+    // numeric or otherwise non-string title would hit .toLowerCase() on a
+    // non-string and throw, and because this runs inside jobs.filter() that
+    // aborts the whole company's results rather than dropping one row.
+    // openrouter-runner already coerced this way; the two paths now agree.
+    const lower = String(title ?? '').toLowerCase();
     const hasPositive = positive.length === 0 || positive.some(m => m(lower));
     const hasNegative = negative.some(m => m(lower));
     return hasPositive && !hasNegative;
@@ -524,18 +582,78 @@ export function buildPostedDateFilter(afterIso, beforeIso) {
 // populate `job.description`. Lever (`descriptionPlain`) does today; others
 // leave it empty and therefore always pass this filter.
 
+// Compile ONE content_filter keyword into a predicate over a lowercased
+// description (#3274).
+//
+// Plain `String.includes()` was the only matcher, so a negative `java` rejected
+// every posting that merely said "JavaScript" and `ios` rejected anything
+// containing "curiosity". Because the scanner records only what PASSED, those
+// postings vanished leaving no trace — the same silent narrowing #3103 found in
+// the title filter. The fix is opt-in rather than a changed default, so an
+// existing config keeps its exact behaviour.
+//
+// Three settings, each anchoring one more edge than the last:
+//
+//   java        plain substring   — matches "Java", "JavaScript", "Javadoc"
+//   stem:java   left edge only    — matches "Java", "JavaScript", "Javadoc"
+//                                   but NOT "ios" inside "curiosity"
+//   word:java   both edges        — matches "Java" alone
+//
+// So `plain ⊇ stem: ⊇ word:`, and stem: is genuinely between the two: it still
+// catches a keyword that STARTS a longer word (the "JavaScript" class) while
+// rejecting one buried mid-word (the "curiosity" class).
+//
+// Deliberately NO short-acronym auto-anchor, which is where this differs from
+// compileKeyword() above. That one anchors 2-3 letter runs because "COO" inside
+// "Coordinator" is always wrong in a title. In description prose a bare "go",
+// "aws" or "sql" is routinely intended, so shortness alone must not anchor.
+//
+// Lookarounds rather than \b for the same reason as compileLocationKeyword:
+// \b is defined relative to word characters and behaves surprisingly when the
+// keyword begins or ends with punctuation (".net").
+export function compileContentKeyword(keyword) {
+  const raw = typeof keyword === 'string' ? keyword.trim().toLowerCase() : '';
+  if (!raw) return () => false;
+
+  const parsed = raw.match(/^(word|stem):(.*)$/);
+  if (!parsed) {
+    // No prefix — the pre-#3274 default, unchanged.
+    return (lower) => lower.includes(raw);
+  }
+
+  const mode = parsed[1];
+  const term = parsed[2].trim();
+  // A bare `word:` / `stem:` with nothing after it matches NOTHING rather than
+  // everything. A no-op entry silently drops one keyword; a match-everything
+  // entry silently vetoes the whole scan. Prefer the small failure.
+  if (!term) return () => false;
+
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startsWord = /[a-z0-9]/.test(term[0]);
+  const endsWord = /[a-z0-9]/.test(term[term.length - 1]);
+  const prefix = startsWord ? '(?<![a-z0-9])' : '';
+  // stem: anchors the left edge only, so it deliberately omits the suffix guard.
+  const suffix = mode === 'word' && endsWord ? '(?![a-z0-9])' : '';
+  const re = new RegExp(`${prefix}${escaped}${suffix}`);
+  return (lower) => re.test(lower);
+}
+
+function compileContentKeywordList(value) {
+  return normalizeKeywordList(value).map(compileContentKeyword);
+}
+
 export function buildContentFilter(contentFilter) {
   if (!contentFilter) return () => true;
-  const positive = normalizeKeywordList(contentFilter.positive);
-  const negative = normalizeKeywordList(contentFilter.negative);
+  const positive = compileContentKeywordList(contentFilter.positive);
+  const negative = compileContentKeywordList(contentFilter.negative);
 
   const byTitleKeyword = new Map();
   if (contentFilter.by_title_keyword && typeof contentFilter.by_title_keyword === 'object' && !Array.isArray(contentFilter.by_title_keyword)) {
     for (const [kw, rule] of Object.entries(contentFilter.by_title_keyword)) {
       if (typeof kw !== 'string' || !kw.trim()) continue;
       byTitleKeyword.set(kw.trim().toLowerCase(), {
-        positive: normalizeKeywordList(rule?.positive),
-        negative: normalizeKeywordList(rule?.negative),
+        positive: compileContentKeywordList(rule?.positive),
+        negative: compileContentKeywordList(rule?.negative),
       });
     }
   }
@@ -551,15 +669,15 @@ export function buildContentFilter(contentFilter) {
 
     if (overrides.length > 0) {
       return overrides.some(rule => {
-        if (rule.negative.length > 0 && rule.negative.some(k => lower.includes(k))) return false;
+        if (rule.negative.length > 0 && rule.negative.some(match => match(lower))) return false;
         if (rule.positive.length === 0) return true;
-        return rule.positive.some(k => lower.includes(k));
+        return rule.positive.some(match => match(lower));
       });
     }
 
-    if (negative.length > 0 && negative.some(k => lower.includes(k))) return false;
+    if (negative.length > 0 && negative.some(match => match(lower))) return false;
     if (positive.length === 0) return true;
-    return positive.some(k => lower.includes(k));
+    return positive.some(match => match(lower));
   };
 }
 
@@ -2000,10 +2118,25 @@ export function loadFingerprintHistory(historyPath = SCAN_HISTORY_PATH) {
  *   Company canonicalizer for the role keys.
  * @returns {{seen: Set<string>, recheckEligible: number, seenCompanyRoles: Set<string>, fingerprintHistory: Array<{url: string, dateStr: string, company: string, title: string, fingerprint: string}>}}
  */
-export function loadDedupSnapshot(policy = {}, canonicalize = defaultCompanyNormalizer) {
-  const scanHistoryText = readIfExists(SCAN_HISTORY_PATH);
-  const pipelineText = readIfExists(PIPELINE_PATH);
-  const applicationsText = readIfExists(APPLICATIONS_PATH);
+/**
+ * @param {object} policy
+ * @param {Function} canonicalize
+ * @param {{scanHistoryPath?: string, pipelinePath?: string, applicationsPath?: string}} [paths]
+ *   Overrides for the three dedup sources. Defaults to the real workspace
+ *   files, so production callers pass nothing.
+ *
+ *   This parameter did not exist, and the three paths were read straight from
+ *   the module constants. tests/scan-dedup-snapshot.test.mjs was already
+ *   passing a `paths` object as the third argument, which JavaScript silently
+ *   discarded — so every "sandboxed" assertion in that file was actually
+ *   reading the developer's real data/, and its fresh-install case could only
+ *   pass on a workspace that had never been scanned. Accepting the override
+ *   is what makes those tests test anything.
+ */
+export function loadDedupSnapshot(policy = {}, canonicalize = defaultCompanyNormalizer, paths = {}) {
+  const scanHistoryText = readIfExists(paths.scanHistoryPath ?? SCAN_HISTORY_PATH);
+  const pipelineText = readIfExists(paths.pipelinePath ?? PIPELINE_PATH);
+  const applicationsText = readIfExists(paths.applicationsPath ?? APPLICATIONS_PATH);
   const { seen, recheckEligible } = collectSeenUrls({ scanHistoryText, pipelineText, applicationsText }, policy);
   const seenCompanyRoles = collectSeenCompanyRoles({ applicationsText, scanHistoryText, pipelineText }, policy, canonicalize);
   const fingerprintHistory = collectFingerprintHistory(scanHistoryText);
@@ -2158,7 +2291,12 @@ const SCAN_RUNS_PATH = 'data/scan-runs.tsv';
 // writeRunFailureRow (#2643) so trend stats can exclude survivorship bias.
 // Consumers MUST parse by header name, never by position — columns may be
 // appended in later versions.
-export const SCAN_RUNS_HEADER = 'timestamp\tstatus\tcompanies\tboards\tfound\tfiltered_title\tfiltered_tier\tfiltered_location\tfiltered_posting_age\tfiltered_salary\tfiltered_content\tfiltered_cooldown\tdupes\tnew_added\terrors\tfiltered_blacklist\tfiltered_visa\tfiltered_posted_date\tfiltered_country_eligibility\n';
+// filtered_freshness and filtered_experience were printed to the console but
+// never recorded here, so every historical row silently failed to account for
+// the jobs they removed — a 19,117-job run showed 1,944 postings vanishing
+// with no column to explain them. Both are appended at the END, per the
+// contract below, along with the refine-pass counters.
+export const SCAN_RUNS_HEADER = 'timestamp\tstatus\tcompanies\tboards\tfound\tfiltered_title\tfiltered_tier\tfiltered_location\tfiltered_posting_age\tfiltered_salary\tfiltered_content\tfiltered_cooldown\tdupes\tnew_added\terrors\tfiltered_blacklist\tfiltered_visa\tfiltered_posted_date\tfiltered_country_eligibility\tfiltered_freshness\tfiltered_experience\trefine_jds_fetched\trefine_dropped_experience\trefine_dropped_cap\trefine_dropped_dead\n';
 
 // Failure-path writes (#2643). main() registers a snapshot closure once the
 // sweep's counters exist (never on --dry-run, never before the sweep starts —
@@ -2184,8 +2322,57 @@ export function writeRunFailureRow(status = 'failed', filePath = SCAN_RUNS_PATH)
   }
 }
 
+/**
+ * Bring an existing scan-runs.tsv up to the current header.
+ *
+ * The header is only written when the file does not yet exist, so appending a
+ * counter leaves every historical file describing rows one column narrower
+ * than the ones being written beneath it. stats.mjs then drops the new rows as
+ * "drifted" (wider than the header) — a silent, permanent loss of every run
+ * recorded after the upgrade, which is exactly what its own comment warns
+ * about. Upgrading the header alone is no better: old rows become "torn"
+ * (narrower) and are skipped instead.
+ *
+ * So do both halves: rewrite the header AND right-pad the existing rows to the
+ * new width with zeros, which is the truthful value — those runs really did
+ * remove zero jobs via counters that did not exist yet.
+ *
+ * Guarded to the append-only case. If the on-disk header is not a prefix of
+ * the current one, the schema changed in some way this function cannot reason
+ * about, so it leaves the file untouched rather than corrupting it.
+ *
+ * @returns {'created'|'migrated'|'current'|'foreign'}
+ */
+export function migrateScanRunsHeader(filePath = SCAN_RUNS_PATH) {
+  if (!existsSync(filePath)) return 'created';
+  const text = readFileSync(filePath, 'utf-8');
+  const lines = text.replace(/\r/g, '').split('\n');
+  const onDisk = (lines[0] ?? '').split('\t').filter(Boolean);
+  const current = SCAN_RUNS_HEADER.trim().split('\t');
+  if (onDisk.length === 0) return 'created';
+  if (onDisk.length === current.length && onDisk.every((h, i) => h === current[i])) return 'current';
+  const isPrefix = onDisk.length < current.length && onDisk.every((h, i) => h === current[i]);
+  if (!isPrefix) return 'foreign';
+
+  const padded = [SCAN_RUNS_HEADER.trim()];
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const cols = line.split('\t');
+    // Only pad rows that match the OLD width. A row that is already wide (or
+    // otherwise malformed) is passed through untouched — this migration is not
+    // the place to guess at it.
+    if (cols.length === onDisk.length) {
+      while (cols.length < current.length) cols.push('0');
+    }
+    padded.push(cols.join('\t'));
+  }
+  writeFileSync(filePath, padded.join('\n') + '\n', 'utf-8');
+  return 'migrated';
+}
+
 export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
   if (!existsSync(filePath)) writeFileSync(filePath, SCAN_RUNS_HEADER, 'utf-8');
+  else migrateScanRunsHeader(filePath);
   const row = [
     c.timestamp, c.status ?? 'completed', c.companies, c.boards, c.found,
     c.filteredTitle, c.filteredTier, c.filteredLocation, c.filteredPostingAge,
@@ -2200,6 +2387,15 @@ export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
     c.filteredPostedDate ?? 0,
     // filtered_country_eligibility (#2093) appended at the END for the same reason.
     c.filteredCountryEligibility ?? 0,
+    // Both of these were computed and printed but never persisted, which is
+    // what made a run's counters fail to sum to `found`.
+    c.filteredFreshness ?? 0,
+    c.filteredExperience ?? 0,
+    // Refine-pass counters. Zero when `refine:` is absent from portals.yml.
+    c.refineJdsFetched ?? 0,
+    c.refineDroppedExperience ?? 0,
+    c.refineDroppedCap ?? 0,
+    c.refineDroppedDead ?? 0,
   ].join('\t') + '\n';
   appendFileSync(filePath, row, 'utf-8');
 }
@@ -2657,6 +2853,10 @@ async function main() {
   let annotatedBlacklisted = 0;
   let totalFilteredVisa = 0;
   let totalFilteredExperience = 0;
+  // Populated by the 5.9 refine pass; stay null when `refine:` is absent so the
+  // summary block can tell "ran and found nothing" from "never ran".
+  let refineStats = null;
+  let refineDropped = null;
   const experienceBandCounts = Object.create(null);
   let totalDupes = 0;
   const newOffers = [];
@@ -2941,8 +3141,10 @@ async function main() {
     || boostKeywords.length > 0
     || verifiedOffers.some(o => o.companySponsorship);
 
-  if (rankingActive && verifiedOffers.length > 1) {
-    verifiedOffers.sort((a, b) => {
+  // Extracted so the refine pass below can re-apply the exact same ordering
+  // after enrichment changes the bands. Two sorts with one definition.
+  const rankOffers = (list) => {
+    list.sort((a, b) => {
       if (experienceFilter.enabled) {
         const byBand = compareEarlyCareerFit(
           { band: a.experienceBand },
@@ -2954,6 +3156,31 @@ async function main() {
       if (bySponsor !== 0) return bySponsor;
       return boosted(b.title) - boosted(a.title);
     });
+    return list;
+  };
+
+  if (rankingActive && verifiedOffers.length > 1) rankOffers(verifiedOffers);
+
+  // 5.9. Refinement. Everything above judged each posting on what its provider's
+  // LIST endpoint happened to ship. That is why a plain "Software Engineer"
+  // asking for 8+ years reaches this point banded `unknown` — the list API sent
+  // no description, so there was no evidence to band it on.
+  //
+  // This pass buys that evidence for the small surviving set: it fetches the
+  // real JD, re-bands, caps any single company's share of the run, and confirms
+  // the posting is still live. Absent a `refine:` block in portals.yml it is
+  // skipped entirely, so an un-migrated config behaves exactly as before.
+  if (config.refine && config.refine.enabled !== false && verifiedOffers.length > 0) {
+    const { refineOffers } = await import('./scan-refine.mjs');
+    const refined = await refineOffers(verifiedOffers, config.refine, {
+      log: (msg) => console.log(msg),
+      resort: rankingActive ? rankOffers : null,
+    });
+    verifiedOffers = refined.offers;
+    refineStats = refined.stats;
+    // Dead and out-of-band URLs still go to scan-history so the next run
+    // dedup-skips them instead of paying to re-fetch the same JD.
+    refineDropped = refined.dropped;
   }
 
   // 6. Write results
@@ -2981,6 +3208,20 @@ async function main() {
   ];
   if (!dryRun && expiredForHistory.length > 0) {
     await appendToScanHistory(expiredForHistory, date, 'skipped_expired');
+  }
+  // Refine-pass casualties. Recorded under distinct statuses so a later run
+  // dedup-skips them rather than re-fetching the same JD or re-checking the
+  // same dead URL, and so the reason stays legible in scan-history.tsv.
+  if (!dryRun && refineDropped) {
+    if (refineDropped.experience?.length > 0) {
+      await appendToScanHistory(refineDropped.experience, date, 'skipped_experience');
+    }
+    if (refineDropped.dead?.length > 0) {
+      await appendToScanHistory(refineDropped.dead, date, 'skipped_expired');
+    }
+    // Company-cap drops are deliberately NOT written: nothing is wrong with
+    // them, they simply lost a slot this run. Recording them would dedup them
+    // out of every future scan — the one drop reason that must stay retryable.
   }
   // Pages that loaded but had no Apply control: record so we don't re-verify
   // them next scan, but never let them reach pipeline.md.
@@ -3054,6 +3295,16 @@ async function main() {
       .map(b => `${b} ${experienceBandCounts[b]}`)
       .join(' · ');
     if (bands) console.log(`Experience bands:      ${bands} (≤${experienceFilter.maxYears}y = early)`);
+  }
+  if (refineStats) {
+    console.log(`\n── Refinement (JD fetch → reband → cap → liveness) ──`);
+    console.log(`JDs fetched:           ${refineStats.enrichFetched} (${refineStats.enrichReclassified} reclassified)`);
+    console.log(`Dropped by experience: ${refineStats.droppedExperience} (JD stated too many years)`);
+    if (refineStats.droppedCap > 0) {
+      console.log(`Dropped by company cap:${String(refineStats.droppedCap).padStart(3)} — ${refineStats.cappedCompanies.join(', ')}`);
+    }
+    console.log(`Dead links removed:    ${refineStats.droppedDead} of ${refineStats.livenessChecked} checked`);
+    console.log(`Survived refinement:   ${refineStats.output} of ${refineStats.input}`);
   }
   if (Object.keys(windows).length > 0 || totalFilteredCooldown > 0) {
     console.log(`Filtered by cooldown:  ${totalFilteredCooldown} removed`);
@@ -3223,6 +3474,12 @@ async function main() {
       filteredVisa: totalFilteredVisa,
       filteredPostedDate: totalFilteredPostedDate,
       filteredCountryEligibility: totalFilteredCountryEligibility,
+      filteredFreshness: totalFilteredFreshness,
+      filteredExperience: totalFilteredExperience,
+      refineJdsFetched: refineStats?.enrichFetched ?? 0,
+      refineDroppedExperience: refineStats?.droppedExperience ?? 0,
+      refineDroppedCap: refineStats?.droppedCap ?? 0,
+      refineDroppedDead: refineStats?.droppedDead ?? 0,
     });
   }
   // The run completed (or was a dry run) — disarm the failure row.

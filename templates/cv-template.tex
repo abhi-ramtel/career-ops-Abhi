@@ -77,6 +77,31 @@
 \newcommand{\resumeItemListStart}{\begin{itemize}}
 \newcommand{\resumeItemListEnd}{\end{itemize}\vspace{0pt}}
 
+% main.tex macro family (used by build-cv-latex.mjs output)
+\newcommand{\roleheading}[4]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \textbf{#1} & \textbf{\small #2} \\
+    \textbf{\textit{\small #3}} & \textbf{\textit{\small #4}} \\
+  \end{tabular*}%
+}
+
+% Project header: {Name | Stack}{Date}
+\newcommand{\projheading}[2]{%
+  \vspace{2pt}%
+  \begin{tabular*}{\textwidth}[t]{l@{\extracolsep{\fill}}r}
+    \small #1 & \textbf{\small #2} \\
+  \end{tabular*}%
+}
+
+% Bullet
+\newcommand{\bul}[1]{%
+  \item \small{#1}\vspace{-1pt}%
+}
+
+\newcommand{\bullist}{\begin{itemize}[leftmargin=12pt, label={\tiny$\bullet$}, topsep=1pt, itemsep=0pt, parsep=0pt]}
+\newcommand{\stopbulls}{\end{itemize}\vspace{-2.75pt}}
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Heading  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \begin{document}
     \begin{center}
@@ -97,27 +122,22 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Education  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Education}
-  \resumeSubHeadingListStart
 {{EDUCATION}}
-  \resumeSubHeadingListEnd
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Experience  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Work Experience}
-  \resumeSubHeadingListStart
+\vspace{-2pt}
 {{EXPERIENCE}}
-  \resumeSubHeadingListEnd
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  PROJECTS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Personal Projects}
-\resumeSubHeadingListStart
+\vspace{-2pt}
 {{PROJECTS}}
-\resumeSubHeadingListEnd
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  AWARDS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Awards \& Honors}
-\resumeSubHeadingListStart
+\vspace{-2pt}
 {{AWARDS}}
-\resumeSubHeadingListEnd
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Technical Skills  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Technical Skills}

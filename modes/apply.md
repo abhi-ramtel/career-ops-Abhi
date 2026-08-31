@@ -6,8 +6,41 @@ Interactive mode for when the candidate is filling out an application form in Ch
 
 ## Requirements
 
-- **Best with Playwright in visible mode**: In visible mode, the candidate sees the browser and the agent can interact with the page.
+- **Greenhouse and Ashby: start with `auto-apply.mjs`** — no browser needed. Both
+  ATSs publish their real application-form schema, so the exact question list,
+  field types, required flags, and option values come back over HTTP:
+
+  ```bash
+  node auto-apply.mjs --url <posting_url>
+  ```
+
+  It auto-fills every deterministic field from `config/profile.yml`, answers
+  knock-out questions honestly from `eligibility:`, separates voluntary
+  self-identification, and returns the short list of questions that need the
+  candidate's words. Exit 3 means something needs a decision before applying
+  (a knock-out risk, or an anti-bot challenge) — read the summary, don't
+  automate past it.
+
+  It has **no submit path**. Feed its `needsWriting` list into Step 7, then Step
+  7b, then hand the finished answers to the candidate.
+- **Best with Playwright in visible mode**: for every other ATS, and for the
+  actual filling. In visible mode, the candidate sees the browser and the agent
+  can interact with the page.
 - **Without Playwright**: the candidate shares a screenshot or pastes the questions manually.
+
+## Anti-bot challenges — never solve these
+
+Some forms embed an explicit human-verification step (Ramp's Security Engineer
+posting encodes a secret in base64 and asks the applicant to decode it, stating
+outright that the goal is to catch bots auto-applying). `auto-apply.mjs` detects
+these and reports them as blocking.
+
+Surface the challenge to the candidate and stop. Do not decode, solve, or work
+around it, and do not draft an answer to the follow-up question that depends on
+having solved it. A form asking someone to prove they are a human is addressed
+to the candidate, not to their tooling — and the whole system is built for
+quality applications a person stands behind, which is the same thing the
+challenge is checking for.
 
 ## Workflow
 
@@ -175,6 +208,49 @@ For each question, generate the response following:
 5. **career-ops proof point**: Include in "Additional info" if there is a field for it
 6. **Recruiter-side risk map**: Use `modes/heuristics/recruiter-side.md` to identify what doubt the question is trying to resolve (motivation, stack fit, logistics, comp, work-auth, availability, seniority) and answer that doubt directly.
 7. **Disclosure discipline**: Answer logistics questions truthfully when asked, but do not volunteer sensitive or HR-only details in unrelated motivation/fit answers.
+
+### Step 7b — Humanizing pass (REQUIRED for every free-text answer)
+
+Every free-text answer gets a second pass through the **`humanize-ai-text`**
+skill before it is shown to the candidate. Invoke the skill; do not approximate
+it from memory. This runs *after* drafting and *after* Voice DNA (`_writing.md`),
+and it is the last thing that touches the prose.
+
+Application answers are read by a person who reads hundreds of them. Generated
+text is obvious to that reader in a way it is not on the page, and the tells are
+structural, not vocabulary. Fix them in the skill's priority order — abstraction
+and treadmill first, word swaps last.
+
+The failure modes that matter most in this format:
+
+- **The abstraction trap.** "I'm passionate about building scalable, impactful
+  systems" is unfalsifiable and describes nobody. Name the system, the number,
+  the thing that broke. One concrete detail per answer, minimum.
+- **The equivocation seesaw.** "While I'm early in my career, I bring a strong
+  foundation…" hedges the claim inside the sentence that makes it. Commit;
+  qualify in a later sentence if the qualification is real.
+- **Burstiness deficit.** Four sentences of near-identical length reads like a
+  metronome. Vary them. Let one run long and the next stop dead.
+- **Inflated significance.** A class project is not a paradigm shift. State what
+  was built and what happened.
+- **Em dashes.** Two or three per thousand words, not one per paragraph.
+- **Chatbot residue.** No "Great question!", no "I hope this helps", no
+  "Here's the thing".
+
+Two rules override the skill wherever they conflict:
+
+1. **Truthfulness wins over voice.** The skill asks for concrete sensory and
+   numeric detail. Take it only from `cv.md`, `article-digest.md`,
+   `interview-prep/story-bank.md`, or something the candidate said in this
+   conversation. Never invent a detail to sound more human — a fabricated
+   specific is worse than a bland generality, and it is the exact failure the
+   Source-of-Truth Boundary exists to prevent.
+2. **`modes/_profile.md` § Writing Style still wins.** The candidate's own voice
+   rules outrank both Voice DNA and the humanizing skill.
+
+Length: match what the form asks for. Where it is silent, 3–6 sentences. The
+skill's "cut 30%" instruction applies — these answers are almost always too long
+on the first draft.
 
 **Output format:**
 

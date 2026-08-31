@@ -272,6 +272,8 @@ const scripts = [
   { name: 'eligibility-filter.mjs --self-test', expectExit: 0 },
   { name: 'test-sponsorship-companies.mjs', expectExit: 0 },
   { name: 'resume-density.mjs --self-test', expectExit: 0 },
+  { name: 'scan-refine.mjs --self-test', expectExit: 0 },
+  { name: 'auto-apply.mjs --self-test', expectExit: 0 },
   { name: 'check-table-freshness.mjs --self-test', expectExit: 0 },
   { name: 'upskill.mjs --self-test', expectExit: 0 },
   { name: 'detect-reposts.mjs --self-test', expectExit: 0 },
@@ -15043,15 +15045,59 @@ try {
   const runRows = readFileSync(runsFile, 'utf-8').trim().split('\n');
   if (runRows[0] === SCAN_RUNS_HEADER.trim() && runRows.length === 3
       && runRows[1].startsWith('2026-07-03T14:02:11Z\tcompleted\t45\t3\t120\t')
-      // filtered_blacklist + filtered_visa + filtered_posted_date + filtered_country_eligibility
-      // land in the four trailing columns (last defaults to 0 — not supplied above).
-      && runRows[1].endsWith('\t4\t7\t2\t0')
+      // filtered_blacklist + filtered_visa + filtered_posted_date + filtered_country_eligibility,
+      // then filtered_freshness + filtered_experience + the four refine counters — all
+      // appended at the end and defaulting to 0 when not supplied above.
+      && runRows[1].endsWith('\t4\t7\t2\t0\t0\t0\t0\t0\t0\t0')
+      && runRows[1].split('\t').length === SCAN_RUNS_HEADER.trim().split('\t').length
       && runRows[2].startsWith('2026-07-04T09:00:00Z\t')) {
     pass('appendScanRunSummary writes the header once, appends one row per run');
   } else {
     fail(`appendScanRunSummary wrong file contents: ${JSON.stringify(runRows)}`);
   }
   rmSync(runsTmp, { recursive: true, force: true });
+
+  // Header migration (#scan-runs drift): a file written by an older release has
+  // a narrower header than the rows a newer scan appends. Left alone, stats.mjs
+  // discards every new row as "drifted" and the loss is silent. The appender
+  // must upgrade the header AND pad the historical rows so both stay readable.
+  {
+    const { migrateScanRunsHeader } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
+    const { computeRunStats } = await import(pathToFileURL(join(ROOT, 'stats.mjs')).href);
+    const migTmp = mkdtempSync(join(tmpdir(), 'scanruns-mig-'));
+    const migFile = join(migTmp, 'scan-runs.tsv');
+    const current = SCAN_RUNS_HEADER.trim().split('\t');
+    const oldHeader = current.slice(0, current.length - 6).join('\t');
+    const oldRow = ['2026-07-01T00:00:00Z', 'completed', '10', '1', '100']
+      .concat(Array(current.length - 6 - 5).fill('3')).join('\t');
+    writeFileSync(migFile, `${oldHeader}\n${oldRow}\n`, 'utf-8');
+
+    const result = migrateScanRunsHeader(migFile);
+    const migRows = readFileSync(migFile, 'utf-8').trim().split('\n');
+    const widthsMatch = migRows.every(r => r.split('\t').length === current.length);
+    const statsAfter = computeRunStats(readFileSync(migFile, 'utf-8'));
+    if (result === 'migrated' && widthsMatch && statsAfter?.totalRuns === 1 && !statsAfter.driftedRows) {
+      pass('migrateScanRunsHeader upgrades an old header and pads its rows');
+    } else {
+      fail(`migrateScanRunsHeader failed: ${result} widths=${widthsMatch} stats=${JSON.stringify(statsAfter)}`);
+    }
+    if (migrateScanRunsHeader(migFile) === 'current') {
+      pass('migrateScanRunsHeader is idempotent');
+    } else {
+      fail('migrateScanRunsHeader re-migrated an already-current file');
+    }
+    // A header this function cannot reason about must be left strictly alone.
+    const foreignFile = join(migTmp, 'foreign.tsv');
+    writeFileSync(foreignFile, 'alpha\tbeta\n1\t2\n', 'utf-8');
+    const foreignBefore = readFileSync(foreignFile, 'utf-8');
+    if (migrateScanRunsHeader(foreignFile) === 'foreign'
+        && readFileSync(foreignFile, 'utf-8') === foreignBefore) {
+      pass('migrateScanRunsHeader leaves an unrecognized schema untouched');
+    } else {
+      fail('migrateScanRunsHeader modified a file with a foreign header');
+    }
+    rmSync(migTmp, { recursive: true, force: true });
+  }
 
   // computeRunStats: header-name parsing, torn rows skipped, failed runs
   // excluded from averages.

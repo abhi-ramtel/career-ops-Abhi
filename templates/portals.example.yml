@@ -356,7 +356,7 @@ title_filter:
   negative:
     # [CUSTOMIZE] Add keywords for roles you want to exclude
     - "Junior"
-    - "Intern"
+    - "word:Intern"
     - ".NET"
     - "Java "
     - "iOS"
@@ -2206,6 +2206,10 @@ job_boards:
     careers_url: https://jobs.founderful.com/jobs
     provider: consider
     consider_board: wingman
+    # Multi-employer board: one listing surface for many companies, so its
+    # re-listings are not a single company reposting a role. detect-reposts.mjs
+    # reads this flag to keep those clusters out of the repost signal.
+    aggregator: true
     enabled: false
     notes: "Swiss VC portfolio board (Consider)"
 
@@ -2217,6 +2221,7 @@ job_boards:
   - name: joinup.ch
     careers_url: https://joinup.ch/browse/jobs
     provider: joinup
+    aggregator: true
     enabled: false
     notes: "Swiss startup job platform (newest SSR page)"
   # ── CryptocurrencyJobs (Web3 / crypto) ─────────────────────────────

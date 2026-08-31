@@ -1,5 +1,8 @@
 # Mode: latex — Tailored LaTeX/Overleaf Resume (main.tex design)
 
+> **Authoring rules:** `modes/resume-authoring.md` is the canonical source for truthfulness/provenance, the fill-the-page density targets, skills discipline, and template selection. Read it before generating content.
+
+
 Export a **job-tailored, one-page, ATS-optimized resume** as `.tex` and compile it to PDF via `tectonic` or `pdflatex`. The template (`templates/cv-template.tex`) follows the design of the candidate's own `data/main.tex`: Charter 10.5pt, accent section titles, the `\roleheading` / `\projheading` / `\bul` macro family, tight spacing.
 
 The tailoring methodology in this mode is ported from the `mcp-overleaf-server` implementation (brief rules, addable/absent keyword signals, density targets, page-fill discipline) and adapted to career-ops: `cv.md` is the master CV, `jd-skill-gap.mjs` provides the deterministic JD signals, `build-cv-latex.mjs` owns all LaTeX emission, `verify-cv-facts.mjs` is the hard anti-fabrication gate, and `generate-latex.mjs` compiles with page-count/underfill reporting.

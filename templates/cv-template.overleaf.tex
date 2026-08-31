@@ -124,10 +124,20 @@
 {{EXPERIENCE}}
   \resumeSubHeadingListEnd
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%  Projects  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%  PROJECTS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \section{Projects}
 \resumeSubHeadingListStart
 {{PROJECTS}}
+\resumeSubHeadingListEnd
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%  AWARDS  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% build-cv-latex.mjs emits {{AWARDS}} as \projheading lines, which expand to
+% \resumeProjectHeading and therefore open with \item — so unlike Education this
+% one DOES need the itemize wrapper. Without this block the emitter's awards
+% substitution had nowhere to land and honours were silently dropped.
+\section{Awards \& Honors}
+\resumeSubHeadingListStart
+{{AWARDS}}
 \resumeSubHeadingListEnd
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%  Education  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -148,5 +158,7 @@
 {{SKILLS}}
 }}
 \end{itemize}
+
+%%%%  END  %%%%
 
 \end{document}
