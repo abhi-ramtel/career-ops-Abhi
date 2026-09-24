@@ -53,7 +53,7 @@
  *      node detect-reposts.mjs --self-test
  *      node detect-reposts.mjs --help
  *
- * Issue #1205 — github.com/santifer/career-ops
+ * Issue #1205 — github.com/career-ops-hq/career-ops
  */
 
 import { readFileSync, existsSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
@@ -234,29 +234,6 @@ export function loadAggregatorCompanies(portalsPath = PORTALS_PATH) {
 
 // Set or Map — both answer .has(key), and every caller only asks that. Keeps a
 // hand-built Set working in tests while the loader returns a Map.
-/**
- * Is `name` one of the flagged aggregator boards?
- *
- * Membership is by NORMALIZED name, using the same normalization
- * loadAggregatorCompanies() applied when it built the lookup — so a caller can
- * ask with whatever spelling its tracker row happens to carry ("jobs board
- * inc", "Jobs Board, Inc.", padded whitespace) and still get a hit. Comparing
- * raw strings here would make the flag work only for callers that already
- * spell the company exactly as portals.yml does, which is the one case that
- * needs no lookup.
- *
- * @param {string} name - Company name in any spelling.
- * @param {Map<string,string>|Set<string>|null} lookup - From loadAggregatorCompanies().
- * @returns {boolean}
- */
-export function isAggregatorCompany(name, lookup) {
-  if (!isKeyLookup(lookup)) return false;
-  const raw = typeof name === 'string' ? name.trim() : '';
-  if (!raw) return false;
-  const key = normalizeCompanyName(raw) || raw.toLowerCase();
-  return Boolean(key) && lookup.has(key);
-}
-
 export function isKeyLookup(value) {
   return value instanceof Set || value instanceof Map;
 }
