@@ -50,6 +50,12 @@ The evaluation inherits `oferta`'s bounded research budget. Company, compensatio
 Save the full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md` (see format in `modes/oferta.md`).
 Include Block G in the saved report. Add **URL:** {url} and **Legitimacy:** {tier} to the report header.
 
+**Optional network paths:** When the candidate explicitly asks for contacts in
+this individual report, or their `report_contacts.include_by_default` setting is
+true, append the opt-in `## I) Network Paths` section defined in
+`modes/contacto.md`. Do not perform this people research for a normal pipeline
+or batch run without an explicit per-report request.
+
 ## Step 3 — Generate PDF
 
 Read `config/profile.yml`. Check `cv.output_format`:

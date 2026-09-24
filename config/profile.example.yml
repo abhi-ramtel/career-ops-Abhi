@@ -230,6 +230,22 @@ cover_letter:
 #   # can inform the CTA wording in `/career-ops contacto`. Keep it one line.
 #   note: "Screens unknown numbers — please email or text first to schedule a call"
 
+# ── Report Contact Paths (optional) ─────────────────────────────────────────
+#
+# Enables an on-request `## I) Network Paths` section in an individual
+# evaluation report. The section proposes up to five people to approach, in
+# this order: people already in data/contacts.tsv or your LinkedIn Connections
+# export, alumni from the schools below, then a recruiter/hiring manager/peer.
+# It never auto-saves third-party PII and never treats a shared alma mater as a
+# pre-existing relationship. Automatic pipeline/batch runs skip this research
+# unless you explicitly request contacts for that specific report.
+# report_contacts:
+#   enabled: true
+#   include_by_default: false  # otherwise say "add contacts to this report"
+#   max_contacts: 5            # 1-5; five is the hard maximum
+#   alumni_schools:
+#     - "Your university"
+
 # ── Outreach / greeting ─────────────────────────────────────────────────────
 #
 # Used by the greeting variant of `/career-ops contacto` (the short first-touch

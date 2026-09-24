@@ -35,6 +35,10 @@ Read `spend_tier` from `config/profile.yml` (see `modes/_shared.md` -- Spend Tie
    c. **Pre-screen gate**: apply the gate above (using the extracted JD). If the JD is an obvious mismatch, log the discard to `data/discard.log` (per the **Discard log** rule above — three fields, no job ID in interactive mode), mark it `- [x] #-- | {url} | skipped (pre-screen mismatch: {reason})` in "Processed", and continue to the next URL. No `REPORT_NUM` is claimed for discarded postings.
    d. Claim the next sequential `REPORT_NUM` atomically by running `node reserve-report-num.mjs` (and release the sentinel using `node reserve-report-num.mjs --release <num>` after the report is written)
    e. **Execute full auto-pipeline**: Evaluation A-F → Report .md → PDF (if score >= `auto_pdf_score_threshold`) → Tracker. Read `modes/_custom.md` → Pipeline Rules, if it exists, and apply its override here. Default (if absent or silent): standard pipeline execution.
+
+   **Network-contact guard:** Do not run the optional five-contact report add-on
+   while draining the inbox. It is per-report, candidate-requested outreach
+   research; the candidate can invoke it later for a specific completed report.
    f. **Move from "Pending" to "Processed"**: `- [x] #NNN | URL | Company | Role | Score/5 | PDF ✅/❌`
 
    **About the PDF gate (configurable):** Read `config/profile.yml` → `auto_pdf_score_threshold`. If the key does not exist, default to `3.0` (this mode's original gate). If the evaluation score is less than the threshold, skip PDF generation: write the report normally, show in the header `**PDF:** not generated — run /career-ops pdf {company-slug} to create on demand`, and mark PDF ❌ in the tracker. If the score is ≥ threshold, generate the PDF as usual.

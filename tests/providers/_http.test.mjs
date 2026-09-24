@@ -207,3 +207,32 @@ if (isRefusedRedirectError(transportFailure) === false) {
     globalThis.fetch = realFetch;
   }
 }
+
+// Regression pin: undici (Node 22+) advertises zstd in accept-encoding by
+// default. amazon.jobs' CDN accepts it, answers Content-Encoding: zstd, and
+// serves a raw identity body truncated at exactly 1 KiB — res.json() then
+// dies with "Unterminated string in JSON at position 1024". This header is
+// what steers every provider request clear of that codec; it silently
+// disappeared once already when _http.mjs was rewritten for DNS/SSRF
+// guarding, so pin it directly rather than only through amazon.mjs's mock.
+{
+  const realFetch = globalThis.fetch;
+  try {
+    const { fetchJson } = await import(pathToFileURL(join(ROOT, 'providers/_http.mjs')).href);
+    let seenHeaders = null;
+    globalThis.fetch = async (_url, opts) => {
+      seenHeaders = opts.headers;
+      return new Response('{}', { status: 200 });
+    };
+    await fetchJson('https://example.com/api');
+    if (seenHeaders?.['accept-encoding'] === 'gzip, deflate') {
+      pass('fetchJson() sends accept-encoding: gzip, deflate (no zstd)');
+    } else {
+      fail(`fetchJson() accept-encoding wrong: ${JSON.stringify(seenHeaders)}`);
+    }
+  } catch (e) {
+    fail(`accept-encoding regression test threw: ${e.message}`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}

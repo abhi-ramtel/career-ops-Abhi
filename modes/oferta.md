@@ -622,6 +622,10 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
 ## H) Draft Application Answers
 (only if score >= 4.5 — draft answers for the application form)
 
+## I) Network Paths (opt-in)
+(up to five verified warm, alumni, recruiter, or peer paths only when requested;
+each includes a source link and a low-pressure approach — see `contacto` mode)
+
 ---
 
 ## Keywords extracted
@@ -629,6 +633,21 @@ Save full evaluation in `reports/{###}-{company-slug}-{YYYY-MM-DD}.md`.
 ```
 
 **Machine Summary (required):** every report carries a `## Machine Summary` YAML fence directly after the header — same schema, exact field names, and rules as the "Machine Summary" block in `batch/batch-prompt.md` (do not duplicate the schema here; that file is the source of truth). It includes `advertised_comp`: the JD's own salary figure **verbatim** (e.g. `"80-90k EUR"`), or `null` when the JD states nothing — never estimated, never replaced with researched market data. This key seeds the advertised salary observation read by `node salary-gap.mjs`. It also includes `risk_summary`: the Risk Summary block mirrored as a map (schema and enum values in `batch/batch-prompt.md`).
+
+### 1a. Optional report contact paths
+
+After the tracker row is recorded, check `config/profile.yml` →
+`report_contacts`. Add `## I) Network Paths (opt-in)` only when either the
+candidate explicitly asks to add contacts to this report, or both
+`enabled: true` and `include_by_default: true` are set during a single,
+interactive evaluation. Execute the **Report networking add-on** in
+`modes/contacto.md` verbatim.
+
+This section is operational outreach guidance, not a fit signal: it never
+changes Blocks A-G, the score, or the recommendation. It is intentionally
+disabled for `pipeline` and `batch` runs unless the candidate explicitly names
+an individual report. Never write found people to `data/contacts.tsv` without
+confirmation.
 
 ### 2. Record in tracker
 
