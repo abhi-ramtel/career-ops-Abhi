@@ -20,8 +20,9 @@ jobs:
       # not GITHUB_TOKEN. This repository does not let Actions create pull
       # requests, and that stays off (the same setting would let workflows
       # approve them), so with GITHUB_TOKEN the run failed at "create pull
-      # request" and no release could be cut. The App (secrets RELEASE_APP_ID,
-      # its client ID, and RELEASE_APP_PRIVATE_KEY) has Contents, Pull requests
+      # request" and no release could be cut. The App (RELEASE_APP_CLIENT_ID or
+      # RELEASE_APP_ID in repo vars/secrets, plus RELEASE_APP_PRIVATE_KEY) has
+      # Contents, Pull requests
       # and Issues read/write on this repository only. Side effects worth
       # knowing: its release PR runs CI like any other PR, and the releases it
       # creates trigger `on: release` workflows (sbom.yml), which releases
@@ -30,7 +31,7 @@ jobs:
         id: app-token
         if: ${{ github.event_name == 'push' }}
         with:
-          client-id: ${{ secrets.RELEASE_APP_ID }}
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID || vars.RELEASE_APP_CLIENT_ID || secrets.RELEASE_APP_ID || vars.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@v5
         id: release
