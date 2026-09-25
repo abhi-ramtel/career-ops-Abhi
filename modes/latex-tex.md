@@ -1,5 +1,8 @@
 # Mode: latex-tex — Tailor a user-owned LaTeX CV in place
 
+> **Authoring rules:** `modes/resume-authoring.md` is the canonical source for truthfulness/provenance, the fill-the-page density targets, skills discipline, and template selection. Read it before generating content.
+
+
 Opt-in mode for candidates who already maintain a hand-tuned `.tex` CV. **Does not change the global source of truth** — `cv.md` remains the default for evaluations, apply mode, and auto-pipeline. Invoke explicitly via `/career-ops latex-tex`.
 
 ## When to use
@@ -12,7 +15,10 @@ Opt-in mode for candidates who already maintain a hand-tuned `.tex` CV. **Does n
 | Family | Detection | Editable prose |
 |--------|-----------|----------------|
 | `resumeSubheading` | `\resumeSubheading` + `\resumeItem`/`\resumeItemWithoutTitle`/`\resumeSubItem` | `\resumeItem{...}` and `\resumeItemWithoutTitle{}{...}` bullets; `\textbf{Category}{: items}` and `\resumeSubItem{Category}{items}` skill values |
+| `roleheading` | `\roleheading` + `\bul` + `\bullist` (the main.tex-design family used by `templates/cv-template.tex`) | `\bul{...}` bullets; `\textbf{Category:} items \\` skill lines **within the Skills section only** (Education's `Coursework:`/`Honors & Activities:` lines look alike but are not editable skills) |
 | `tabularx-itemize` | `tabularx` + `itemize`, no resume macros | `\item` body text in the document body |
+
+Detection order matters: `roleheading` is checked before `tabularx-itemize`, because roleheading documents load `tabularx` and use `itemize` as well (an unpatched document would otherwise be misdetected and only its `\item` lines extracted).
 
 Extraction only reads the document body (preamble macro definitions are skipped) and ignores commented-out macro calls — old bullets kept as `%` comments never become editable slots.
 
@@ -20,11 +26,29 @@ Any other layout → stop with the script error and suggest `/career-ops latex` 
 
 ## Source file resolution
 
-1. `config/profile.yml → latex.source` if set
+**Implemented in `extract-latex-content.mjs` (`resolveLatexSource`) — run it with
+no path argument and it resolves the source itself.** This used to be prose here
+and nothing else, so `latex.source` was honoured only when whoever drove the mode
+remembered to read the profile; a user pointing at `data/main.tex` silently got
+their file ignored.
+
+```bash
+node extract-latex-content.mjs --out /tmp/cv-slots-{company}.json
+```
+
+Order:
+
+1. `config/profile.yml → latex.source` if set (resolved relative to the project
+   root, so it means the same thing from any working directory)
 2. Else `resume.tex` in project root
 3. Else `cv.tex` in project root
 
-If none exist, stop and ask the user to add their `.tex` file or set `latex.source`.
+A configured path that does not exist is reported as **missing** and stops the
+run — it never falls through to a filename default, because tailoring the wrong
+document silently is worse than stopping.
+
+If nothing resolves, stop and ask the user to add their `.tex` file or set
+`latex.source`.
 
 ```yaml
 # config/profile.yml (optional, user layer)
@@ -80,5 +104,5 @@ Same as `modes/latex.md` and `modes/pdf.md`:
 
 | Mode | Input | Output |
 |------|-------|--------|
-| `latex` | `cv.md` | career-ops `templates/cv-template.tex` → `.tex` + PDF |
-| `latex-tex` | user's `resume.tex` | same template shape, tailored prose only → `.tex` + PDF |
+| `latex` | `cv.md` | career-ops `templates/cv-template.tex` (main.tex design) → `.tex` + PDF |
+| `latex-tex` | user's `resume.tex` (any supported family, incl. main.tex-style) | same template shape, tailored prose only → `.tex` + PDF |

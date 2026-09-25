@@ -225,8 +225,11 @@ if (isRefusedRedirectError(transportFailure) === false) {
       return new Response('{}', { status: 200 });
     };
     await fetchJson('https://example.com/api');
-    if (seenHeaders?.['accept-encoding'] === 'gzip, deflate') {
-      pass('fetchJson() sends accept-encoding: gzip, deflate (no zstd)');
+    const encoding = seenHeaders instanceof Headers
+      ? seenHeaders.get('accept-encoding')
+      : seenHeaders?.['accept-encoding'];
+    if (encoding === 'gzip, deflate, br') {
+      pass('fetchJson() sends accept-encoding without zstd');
     } else {
       fail(`fetchJson() accept-encoding wrong: ${JSON.stringify(seenHeaders)}`);
     }

@@ -64,6 +64,8 @@ import { loadProviders, resolveProvider } from './providers/_registry.mjs';
 import { mergeProviderPlugins } from './plugins/_engine.mjs';
 import { classifyFetchError } from './verify-portals.mjs';
 import { fingerprintText, findCrossListings } from './fingerprint-core.mjs';
+import { classifyExperienceLevel, compareEarlyCareerFit } from './experience-level.mjs';
+import { matchesGlobalExclusion } from './eligibility-filter.mjs';
 import { resolveColumns, parseTrackerRow, normalizeTextKey, extractReqNumber, REQ_NUMBER_RE } from './tracker-parse.mjs';
 import { workdayDedupKey, stripWorkdayRepostSuffix, isWorkdayJobUrl } from './providers/workday.mjs';
 import { normalizeCompany } from './tracker-utils.mjs';
@@ -926,6 +928,67 @@ export function buildVisaFilter(visaFilter) {
   };
 }
 
+// ── Experience-level filter (early-career targeting) ────────────────
+// Optional. If `experience_filter` is absent (or `enabled: false`), every job
+// passes and nothing is annotated.
+//
+// This is a PREFERENCE mechanism first and a filter second. `skip_tiers`
+// already drops on classifyTier's title-only verdict; that is deliberately
+// blunt, and on its own it cannot express "0-2 years preferred" because a
+// plain "Software Engineer" title carries no level marker at all. So this
+// block bands each posting with experience-level.mjs (title + description +
+// classifyTier) and then:
+//
+//   - `drop_bands`  — hard skip, opt-in and empty by default. Never includes
+//     'unknown': most ATS list payloads ship no description, so unknown is
+//     "no evidence", and dropping it would silently discard the majority of a
+//     scan.
+//   - ordering      — surviving offers are sorted best-fit-first, so an
+//     early-career role outranks an unbanded one even when both pass.
+//   - annotation    — the band rides into pipeline.md as a labeled `level:`
+//     segment, so the agent-side ranking and rank-pipeline.mjs can use it
+//     without re-parsing anything.
+//
+// Config shape (portals.yml):
+//   experience_filter:
+//     enabled: true
+//     max_years: 2            # the ceiling that defines "early"
+//     drop_bands: ["senior"]  # optional hard skip
+//     annotate: true          # write `level:` into pipeline rows (default true)
+
+export function buildExperienceFilter(experienceFilter) {
+  const off = { enabled: false, classify: () => null, shouldDrop: () => false, annotate: false };
+  if (!experienceFilter || experienceFilter.enabled === false) return off;
+
+  const maxYears = Number.isFinite(Number(experienceFilter.max_years))
+    && Number(experienceFilter.max_years) >= 0
+    ? Number(experienceFilter.max_years)
+    : 2;
+
+  const dropBands = new Set(
+    (Array.isArray(experienceFilter.drop_bands) ? experienceFilter.drop_bands : [])
+      .filter(b => typeof b === 'string')
+      .map(b => b.trim().toLowerCase())
+      // 'unknown' means "no evidence either way" — refusing to drop it here is
+      // what keeps a description-less provider (most of them) usable at all.
+      .filter(b => b !== 'unknown'),
+  );
+
+  const annotate = experienceFilter.annotate !== false;
+
+  return {
+    enabled: true,
+    maxYears,
+    annotate,
+    classify: (job) => classifyExperienceLevel({
+      title: job?.title ?? '',
+      description: typeof job?.description === 'string' ? job.description : '',
+      maxYears,
+    }),
+    shouldDrop: (banded) => Boolean(banded) && dropBands.has(banded.band),
+  };
+}
+
 // ── Salary filter ───────────────────────────────────────────────────
 // Optional. If `salary_filter` is absent from portals.yml, all salaries pass.
 // Semantics:
@@ -984,6 +1047,48 @@ export function buildSalaryFilter(salaryFilter) {
 
     // Otherwise pass (overlap exists or no valid range to compare)
     return true;
+  };
+}
+
+// ── Freshness filter ────────────────────────────────────────────────
+// Optional. If `freshness_filter` is absent from portals.yml, all postings
+// pass. Drops stale postings using the provider-supplied `postedAt`
+// (epoch ms — emitted by greenhouse/ashby/lever/workday). Applied AFTER the
+// salary filter, BEFORE dedup.
+//
+// Semantics:
+//   - max_age_days missing / not a positive number → filter disabled (warn),
+//     all pass
+//   - postedAt missing or unparseable → PASS by default (conservative — most
+//     WebSearch hits and several ATS providers don't expose a date). Set
+//     `drop_undated: true` to instead reject postings without a usable date.
+//   - postedAt in the future (provider clock skew) → pass
+//   - otherwise pass only when (now - postedAt) <= max_age_days
+//
+// `now` is captured once at build time so a single scan classifies every
+// posting against the same clock (and so tests can inject a fixed clock).
+
+export function buildFreshnessFilter(freshnessFilter, { now = Date.now() } = {}) {
+  if (!freshnessFilter) return () => true;
+
+  const maxAgeDays = Number(freshnessFilter.max_age_days);
+  const dropUndated = freshnessFilter.drop_undated === true;
+
+  if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
+    console.error('Warning: freshness_filter.max_age_days must be a positive number — freshness filter disabled');
+    return () => true;
+  }
+
+  const maxAgeMs = maxAgeDays * 86_400_000;
+
+  return (postedAt) => {
+    // No usable date → keep unless the user opted into strict dropping.
+    if (postedAt == null) return !dropUndated;
+    const ts = Number(postedAt);
+    if (!Number.isFinite(ts)) return !dropUndated;
+    const age = now - ts;
+    if (age < 0) return true; // future-dated (clock skew) → keep
+    return age <= maxAgeMs;
   };
 }
 
@@ -2418,6 +2523,20 @@ export function formatPipelineOffer(offer) {
   // posted:, before note:, for a stable serialization.
   const trust = formatTrustSegment(offer);
   if (trust) line = `${line} | ${trust}`;
+  // Labeled experience-band segment. Rides like posted:/trust:/note: so it
+  // never disturbs the positional 1/3/4/5-column contract in modes/pipeline.md,
+  // and is emitted only when experience_filter actually banded the offer —
+  // an unbanded scan produces byte-identical rows to before. Carries the
+  // stated years when the JD had them, since "early (0-2y)" is the part a
+  // human skimming the inbox actually wants.
+  const band = typeof offer.experienceBand === 'string' ? offer.experienceBand : '';
+  if (band) {
+    const y = offer.experienceYears;
+    const yearsNote = y && (y.min != null || y.max != null)
+      ? ` ${y.min ?? 0}-${y.max ?? '+'}y`
+      : '';
+    line = `${line} | ${sanitizeMarkdownField(`level: ${band}${yearsNote}`)}`;
+  }
   // Optional free-text ranking signal (e.g. a curated-list flag an importer
   // attaches). Labeled — not positional like location/compensation — so it can
   // ride on any row shape (bare URL, 3-, 4-, or 5-column) without a reader
@@ -2818,7 +2937,12 @@ const SCAN_RUNS_PATH = path.join(DATA_ROOT, 'data/scan-runs.tsv');
 // writeRunFailureRow (#2643) so trend stats can exclude survivorship bias.
 // Consumers MUST parse by header name, never by position — columns may be
 // appended in later versions.
-export const SCAN_RUNS_HEADER = 'timestamp\tstatus\tcompanies\tboards\tfound\tfiltered_title\tfiltered_tier\tfiltered_location\tfiltered_posting_age\tfiltered_salary\tfiltered_content\tfiltered_cooldown\tdupes\tnew_added\terrors\tfiltered_blacklist\tfiltered_visa\tfiltered_posted_date\tfiltered_country_eligibility\n';
+// filtered_freshness and filtered_experience were printed to the console but
+// never recorded here, so every historical row silently failed to account for
+// the jobs they removed — a 19,117-job run showed 1,944 postings vanishing
+// with no column to explain them. Both are appended at the END, per the
+// contract below, along with the refine-pass counters.
+export const SCAN_RUNS_HEADER = 'timestamp\tstatus\tcompanies\tboards\tfound\tfiltered_title\tfiltered_tier\tfiltered_location\tfiltered_posting_age\tfiltered_salary\tfiltered_content\tfiltered_cooldown\tdupes\tnew_added\terrors\tfiltered_blacklist\tfiltered_visa\tfiltered_posted_date\tfiltered_country_eligibility\tfiltered_freshness\tfiltered_experience\trefine_jds_fetched\trefine_dropped_experience\trefine_dropped_cap\trefine_dropped_dead\n';
 
 // Failure-path writes (#2643). main() registers a snapshot closure once the
 // sweep's counters exist (never on --dry-run, never before the sweep starts —
@@ -2844,27 +2968,59 @@ export function writeRunFailureRow(status = 'failed', filePath = SCAN_RUNS_PATH)
   }
 }
 
+/**
+ * Bring an existing scan-runs.tsv up to the current header.
+ *
+ * The header is only written when the file does not yet exist, so appending a
+ * counter leaves every historical file describing rows one column narrower
+ * than the ones being written beneath it. stats.mjs then drops the new rows as
+ * "drifted" (wider than the header) — a silent, permanent loss of every run
+ * recorded after the upgrade, which is exactly what its own comment warns
+ * about. Upgrading the header alone is no better: old rows become "torn"
+ * (narrower) and are skipped instead.
+ *
+ * So do both halves: rewrite the header AND right-pad the existing rows to the
+ * new width with zeros, which is the truthful value — those runs really did
+ * remove zero jobs via counters that did not exist yet.
+ *
+ * Guarded to the append-only case. If the on-disk header is not a prefix of
+ * the current one, the schema changed in some way this function cannot reason
+ * about, so it leaves the file untouched rather than corrupting it.
+ *
+ * @returns {'created'|'migrated'|'current'|'foreign'}
+ */
+export function migrateScanRunsHeader(filePath = SCAN_RUNS_PATH) {
+  if (!existsSync(filePath)) return 'created';
+  const text = readFileSync(filePath, 'utf-8');
+  const lines = text.replace(/\r/g, '').split('\n');
+  const onDisk = (lines[0] ?? '').split('\t').filter(Boolean);
+  const current = SCAN_RUNS_HEADER.trim().split('\t');
+  if (onDisk.length === 0) return 'created';
+  if (onDisk.length === current.length && onDisk.every((h, i) => h === current[i])) return 'current';
+  const isPrefix = onDisk.length < current.length && onDisk.every((h, i) => h === current[i]);
+  if (!isPrefix) return 'foreign';
+
+  const padded = [SCAN_RUNS_HEADER.trim()];
+  for (const line of lines.slice(1)) {
+    if (!line.trim()) continue;
+    const cols = line.split('\t');
+    // Only pad rows that match the OLD width. A row that is already wide (or
+    // otherwise malformed) is passed through untouched — this migration is not
+    // the place to guess at it.
+    if (cols.length === onDisk.length) {
+      while (cols.length < current.length) cols.push('0');
+    }
+    padded.push(cols.join('\t'));
+  }
+  writeFileSync(filePath, padded.join('\n') + '\n', 'utf-8');
+  return 'migrated';
+}
+
 export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
 
   mkdirSync(path.dirname(filePath), { recursive: true });
   if (!existsSync(filePath)) writeFileSync(filePath, SCAN_RUNS_HEADER, 'utf-8');
-  // The header is written only on first creation, so a release that appends or inserts a counter
-  // leaves existing files with a header that no longer describes the rows below it. Nothing
-  // migrates it and nothing notices: stats.mjs reads by column NAME, so it silently returns a
-  // neighbouring counter. Surface the mismatch here rather than papering over it — rewriting the
-  // header in place would misalign every historical row instead.
-  if (!existsSync(filePath)) {
-    atomicWriteFile(filePath, SCAN_RUNS_HEADER);
-  } else {
-    const onDisk = (readFileSync(filePath, 'utf-8').split('\n', 1)[0] || '') + '\n';
-    if (onDisk !== SCAN_RUNS_HEADER) {
-      console.error(
-        `Warning: ${filePath} header has ${onDisk.trim().split('\t').length} columns but this build writes `
-        + `${SCAN_RUNS_HEADER.trim().split('\t').length}. Rows below the header are positionally offset and `
-        + `stats.mjs will exclude them. Move ${filePath} aside to start a fresh file — deleting only the header does NOT recover it, because the file still exists and the next run would read the first data row as the header.`,
-      );
-    }
-  }
+  else migrateScanRunsHeader(filePath);
   const row = [
     c.timestamp, c.status ?? 'completed', c.companies, c.boards, c.found,
     c.filteredTitle, c.filteredTier, c.filteredLocation, c.filteredPostingAge,
@@ -2879,6 +3035,15 @@ export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
     c.filteredPostedDate ?? 0,
     // filtered_country_eligibility (#2093) appended at the END for the same reason.
     c.filteredCountryEligibility ?? 0,
+    // Both of these were computed and printed but never persisted, which is
+    // what made a run's counters fail to sum to `found`.
+    c.filteredFreshness ?? 0,
+    c.filteredExperience ?? 0,
+    // Refine-pass counters. Zero when `refine:` is absent from portals.yml.
+    c.refineJdsFetched ?? 0,
+    c.refineDroppedExperience ?? 0,
+    c.refineDroppedCap ?? 0,
+    c.refineDroppedDead ?? 0,
   ].join('\t') + '\n';
   appendFileSync(filePath, row, 'utf-8');
 }
@@ -3251,6 +3416,7 @@ async function main() {
   }
 
   const locationFilter = buildLocationFilter(config.location_filter);
+  const freshnessFilter = buildFreshnessFilter(config.freshness_filter);
   const postingAgeFilter = buildPostingAgeFilter(config.max_posting_age_days);
   const postedDateFilter = buildPostedDateFilter(effectiveAfter, postedBefore);
 
@@ -3264,6 +3430,7 @@ async function main() {
   const countryEligibilityFilter = buildCountryEligibilityFilter(config.country_eligibility_filter, candidateCountry);
   const visaFilter = buildVisaFilter(config.visa_filter);
   const visaEnabled = Boolean(config.visa_filter) && config.visa_filter.enabled !== false;
+  const experienceFilter = buildExperienceFilter(config.experience_filter);
 
   // 3. Resolve a provider for each enabled company / board
   const targets = [];
@@ -3359,7 +3526,14 @@ async function main() {
   let totalFilteredCountryEligibility = 0;
   let totalFilteredBlacklist = 0;
   let annotatedBlacklisted = 0;
+  let totalFilteredFreshness = 0;
   let totalFilteredVisa = 0;
+  let totalFilteredExperience = 0;
+  // Populated by the 5.9 refine pass; stay null when `refine:` is absent so the
+  // summary block can tell "ran and found nothing" from "never ran".
+  let refineStats = null;
+  let refineDropped = null;
+  const experienceBandCounts = Object.create(null);
   let totalDupes = 0;
   const newOffers = [];
   const errors = [...resolveErrors];
@@ -3474,6 +3648,14 @@ async function main() {
           }
         }
 
+        if (matchesGlobalExclusion(job)) {
+          totalFilteredVisa++;
+          continue;
+        }
+        if (!freshnessFilter(job.postedAt)) {
+          totalFilteredFreshness++;
+          continue;
+        }
         if (!titleFilter(job.title)) {
           totalFilteredTitle++;
           continue;
@@ -3511,6 +3693,20 @@ async function main() {
         if (!visaFilter(job.description)) {
           totalFilteredVisa++;
           continue;
+        }
+        // Banded last among the content filters: it is the only one that
+        // annotates rather than merely accepting/rejecting, so there is no
+        // point computing it for a job an earlier filter already dropped.
+        if (experienceFilter.enabled) {
+          const banded = experienceFilter.classify(job);
+          if (experienceFilter.shouldDrop(banded)) {
+            totalFilteredExperience++;
+            continue;
+          }
+          job.experienceBand = banded.band;
+          job.experienceYears = banded.years;
+          job.experienceSignals = banded.signals;
+          experienceBandCounts[banded.band] = (experienceBandCounts[banded.band] || 0) + 1;
         }
         const dedupUrl = normalizeUrlForDedup(job.url);
         if (seenUrls.has(dedupUrl)) {
@@ -3561,6 +3757,14 @@ async function main() {
           source: sourceName,
           tracked: Boolean(careersUrlDomain),
           careersUrlDomain,
+          // Carried from the portals.yml entry so the ranking pass and the
+          // pipeline row can see the company's visa history without re-reading
+          // config. Undefined for companies with no recorded history, which is
+          // the common case and must stay neutral rather than negative.
+          companySponsorship: company?.sponsorship && typeof company.sponsorship === 'object'
+            ? company.sponsorship
+            : undefined,
+          companyFortune500: company?.fortune500 === true || undefined,
         });
       }
     } catch (err) {
@@ -3608,6 +3812,94 @@ async function main() {
   // so this sees the same bytes a re-read would — minus the third full parse.
   const crossListings = findCrossListings(verifiedOffers, dedupSnapshot.fingerprintHistory);
 
+  // 5.8. Early-career ordering. Sorted only for WRITE order — nothing is
+  // dropped here, and a scan with experience_filter off is byte-identical to
+  // before. Array.prototype.sort is stable in Node, so offers sharing a band
+  // keep their discovery order (company order in portals.yml), which is what
+  // makes two runs over unchanged data produce the same pipeline.md.
+  //
+  // `title_filter.seniority_boost` feeds THIS comparator as the within-band
+  // tiebreaker rather than getting its own pass. It had been validated by
+  // validate-portals.mjs but read by nothing since it was introduced — a knob
+  // the config documented and the scanner ignored. Folding it in here revives
+  // it without creating a second ordering mechanism to keep in sync.
+  const boostKeywords = (Array.isArray(config.title_filter?.seniority_boost)
+    ? config.title_filter.seniority_boost : [])
+    .filter(k => typeof k === 'string' && k.trim())
+    .map(k => k.trim().toLowerCase());
+  const boosted = (title) => {
+    if (boostKeywords.length === 0) return 0;
+    const t = String(title || '').toLowerCase();
+    return boostKeywords.some(k => t.includes(k)) ? 1 : 0;
+  };
+
+  // Company-level sponsorship history, from the tracked_companies entry the
+  // offer came from. This is a RANKING signal only and deliberately ranks
+  // BELOW the experience band: a senior role at a known sponsor is still a
+  // senior role. It is emphatically not a promise about this posting —
+  // "company historically sponsors H-1B" != "this job sponsors H-1B" — so the
+  // per-job visa/eligibility filters above already had the final say, and a
+  // posting that failed them never reaches this sort.
+  const SPONSOR_RANK = { likely: 2, historical: 1, unknown: 0 };
+  const sponsorWeight = (offer) => {
+    const status = offer?.companySponsorship?.status;
+    return typeof status === 'string' ? (SPONSOR_RANK[status.toLowerCase()] ?? 0) : 0;
+  };
+
+  const rankingActive = experienceFilter.enabled
+    || boostKeywords.length > 0
+    || verifiedOffers.some(o => o.companySponsorship);
+
+  // Extracted so the refine pass below can re-apply the exact same ordering
+  // after enrichment changes the bands. Two sorts with one definition.
+  const rankOffers = (list) => {
+    list.sort((a, b) => {
+      if (experienceFilter.enabled) {
+        const byBand = compareEarlyCareerFit(
+          { band: a.experienceBand },
+          { band: b.experienceBand },
+        );
+        if (byBand !== 0) return byBand;
+      }
+      const bySponsor = sponsorWeight(b) - sponsorWeight(a);
+      if (bySponsor !== 0) return bySponsor;
+      return boosted(b.title) - boosted(a.title);
+    });
+    return list;
+  };
+
+  if (rankingActive && verifiedOffers.length > 1) rankOffers(verifiedOffers);
+
+  // 5.9. Refinement. Everything above judged each posting on what its provider's
+  // LIST endpoint happened to ship. That is why a plain "Software Engineer"
+  // asking for 8+ years reaches this point banded `unknown` — the list API sent
+  // no description, so there was no evidence to band it on.
+  //
+  // This pass buys that evidence for the small surviving set: it fetches the
+  // real JD, re-bands, caps any single company's share of the run, and confirms
+  // the posting is still live. Absent a `refine:` block in portals.yml it is
+  // skipped entirely, so an un-migrated config behaves exactly as before.
+  if (config.refine && config.refine.enabled !== false && verifiedOffers.length > 0) {
+    const { refineOffers } = await import('./scan-refine.mjs');
+    const refined = await refineOffers(verifiedOffers, config.refine, {
+      log: (msg) => console.log(msg),
+      resort: rankingActive ? rankOffers : null,
+    });
+    // Recheck newly fetched descriptions: list APIs often omitted the evidence
+    // used by the initial citizenship/clearance and sponsorship filters.
+    verifiedOffers = refined.offers.filter(offer => {
+      if (matchesGlobalExclusion(offer) || !visaFilter(offer.description)) {
+        totalFilteredVisa++;
+        return false;
+      }
+      return true;
+    });
+    refineStats = refined.stats;
+    // Dead and out-of-band URLs still go to scan-history so the next run
+    // dedup-skips them instead of paying to re-fetch the same JD.
+    refineDropped = refined.dropped;
+  }
+
   // 6. Write results
   if (!dryRun && verifiedOffers.length > 0) {
     await appendToPipeline(verifiedOffers);
@@ -3633,6 +3925,20 @@ async function main() {
   ];
   if (!dryRun && expiredForHistory.length > 0) {
     await appendToScanHistory(expiredForHistory, date, 'skipped_expired');
+  }
+  // Refine-pass casualties. Recorded under distinct statuses so a later run
+  // dedup-skips them rather than re-fetching the same JD or re-checking the
+  // same dead URL, and so the reason stays legible in scan-history.tsv.
+  if (!dryRun && refineDropped) {
+    if (refineDropped.experience?.length > 0) {
+      await appendToScanHistory(refineDropped.experience, date, 'skipped_experience');
+    }
+    if (refineDropped.dead?.length > 0) {
+      await appendToScanHistory(refineDropped.dead, date, 'skipped_expired');
+    }
+    // Company-cap drops are deliberately NOT written: nothing is wrong with
+    // them, they simply lost a slot this run. Recording them would dedup them
+    // out of every future scan — the one drop reason that must stay retryable.
   }
   // Pages that loaded but had no Apply control: record so we don't re-verify
   // them next scan, but never let them reach pipeline.md.
@@ -3690,6 +3996,24 @@ async function main() {
   }
   if (visaEnabled) {
     console.log(`Filtered by visa:      ${totalFilteredVisa} removed`);
+  }
+  if (experienceFilter.enabled) {
+    console.log(`Filtered by experience: ${totalFilteredExperience} removed`);
+    const bands = ['early', 'unknown', 'intern', 'mid', 'senior']
+      .filter(b => experienceBandCounts[b])
+      .map(b => `${b} ${experienceBandCounts[b]}`)
+      .join(' · ');
+    if (bands) console.log(`Experience bands:      ${bands} (≤${experienceFilter.maxYears}y = early)`);
+  }
+  if (refineStats) {
+    console.log(`\n── Refinement (JD fetch → reband → cap → liveness) ──`);
+    console.log(`JDs fetched:           ${refineStats.enrichFetched} (${refineStats.enrichReclassified} reclassified)`);
+    console.log(`Dropped by experience: ${refineStats.droppedExperience} (JD stated too many years)`);
+    if (refineStats.droppedCap > 0) {
+      console.log(`Dropped by company cap:${String(refineStats.droppedCap).padStart(3)} — ${refineStats.cappedCompanies.join(', ')}`);
+    }
+    console.log(`Dead links removed:    ${refineStats.droppedDead} of ${refineStats.livenessChecked} checked`);
+    console.log(`Survived refinement:   ${refineStats.output} of ${refineStats.input}`);
   }
   if (Object.keys(windows).length > 0 || totalFilteredCooldown > 0) {
     console.log(`Filtered by cooldown:  ${totalFilteredCooldown} removed`);
@@ -3884,6 +4208,12 @@ async function main() {
       filteredVisa: totalFilteredVisa,
       filteredPostedDate: totalFilteredPostedDate,
       filteredCountryEligibility: totalFilteredCountryEligibility,
+      filteredFreshness: totalFilteredFreshness,
+      filteredExperience: totalFilteredExperience,
+      refineJdsFetched: refineStats?.enrichFetched ?? 0,
+      refineDroppedExperience: refineStats?.droppedExperience ?? 0,
+      refineDroppedCap: refineStats?.droppedCap ?? 0,
+      refineDroppedDead: refineStats?.droppedDead ?? 0,
     });
   }
   // The run completed (or was a dry run) — disarm the failure row.
@@ -3896,7 +4226,9 @@ async function main() {
     const filtered = totalFilteredTitle + totalFilteredTier + totalFilteredLocation
       + totalFilteredPostingAge + totalFilteredPostedDate + totalFilteredSalary
       + totalFilteredContent + totalFilteredCountryEligibility + totalFilteredBlacklist
-      + totalFilteredVisa + totalFilteredCooldown;
+      + totalFilteredVisa + totalFilteredCooldown + totalFilteredFreshness + totalFilteredExperience
+      + (refineStats?.droppedExperience ?? 0) + (refineStats?.droppedCap ?? 0)
+      + (refineStats?.droppedDead ?? 0);
     emitJsonReceipt({
       version: 'careerops.scan.receipt@1',
       date,
