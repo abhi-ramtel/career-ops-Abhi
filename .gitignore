@@ -154,6 +154,10 @@ plan/
 documents/*
 !documents/.gitkeep
 !documents/README.md
+
+# A separate local checkout was accidentally committed as a gitlink.
+# Keep the checkout available locally without re-adding it to this repo.
+/career-ops/
 # Intake fingerprints — the recorded source filenames may themselves carry
 # PII (e.g. cv/jane-doe-master-cv.pdf). #1723
 data/intake-state.json
