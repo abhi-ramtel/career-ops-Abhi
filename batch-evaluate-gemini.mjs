@@ -18,8 +18,11 @@ import { fileURLToPath } from 'url';
 import { chromium } from 'playwright';
 import { execFileSync, execFile } from 'child_process';
 import { promisify } from 'util';
-import { rejectPrivateOrInvalid } from './liveness-browser.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { rejectPrivateOrInvalid, checkUrlLiveness, LIVENESS_CONTEXT_OPTIONS } from './liveness-browser.mjs';
+import { isUnreadableVerdict } from './liveness-core.mjs';
+import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { withPipelineLock } from './pipeline-lock.mjs';
+import { localToday } from './lib/local-today.mjs';
 import { TSV_ADDITION_HEADER } from './tracker-parse.mjs';
 import {
   normalizedTrackerScore, slugifyCompany, tsvSafe,
@@ -32,6 +35,7 @@ try {
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { isMainModule } from './lib/is-main-module.mjs';
+import { withJdArchiveSection } from './lib/jd-archive-section.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
@@ -39,10 +43,30 @@ export const PATHS = {
   shared:      join(ROOT, 'modes', '_shared.md'),
   oferta:      join(ROOT, 'modes', 'oferta.md'),
   cv:          join(DATA_ROOT, 'cv.md'),
-  profile:     join(ROOT, 'modes', '_profile.md'),
-  profileYml:  join(DATA_ROOT, 'config', 'profile.yml'),
+  // DATA_ROOT, not ROOT. modes/_profile.md is USER LAYER in the Data Contract
+  // — doctor.mjs auto-copies it into the user's root from
+  // modes/_profile.template.md — and it carries the archetypes and North Star
+  // every A-F evaluation scores against.
+  //
+  // Read from the CODE root it resolves to the shipped template, which is the
+  // exact failure AGENTS.md's `unpersonalized` warning exists to prevent:
+  // "offers get scored against the template author's targeting rather than
+  // yours". Silently, and for every offer in the batch.
+  //
+  // gemini-eval.mjs:89 and ollama-eval.mjs:56 both already use DATA_ROOT here.
+  profile:     join(DATA_ROOT, 'modes', '_profile.md'),
+  custom:      join(DATA_ROOT, 'modes', '_custom.md'),
+  profileYml:  getProfilePath(),
   reports:     join(DATA_ROOT, 'reports'),
-  trackerAdditions: join(ROOT, 'batch', 'tracker-additions'),
+  // DATA_ROOT, matching gemini-eval.mjs:93. These TSVs are the batch's OUTPUT —
+  // one per evaluated offer, for merge-tracker.mjs to fold into the tracker —
+  // so they are user data living under a system-layer directory name.
+  //
+  // Written to the CODE root they land in the checkout while merge-tracker,
+  // run normally, looks under the data root and finds nothing. The batch
+  // reports success, the tracker gains no rows, and the evidence sits in a
+  // directory the user has no reason to open.
+  trackerAdditions: join(DATA_ROOT, 'batch', 'tracker-additions'),
   pipeline:    join(DATA_ROOT, 'data', 'pipeline.md')
 };
 
@@ -82,13 +106,13 @@ function setupEnvironment() {
 
   const modelArg = process.argv.find(a => a.startsWith('--model='));
   const resolvedSpendTier = readSpendTier();
-  modelName = modelArg ? modelArg.split('=')[1] : spendTierToModel(resolvedSpendTier); // GitHub diff trigger
+  modelName = modelArg ? modelArg.split('=')[1] : spendTierToModel(resolvedSpendTier);
   const genAI = new GoogleGenerativeAI(apiKey);
   model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
   });
-} // GitHub diff trigger for bot outdate
+}
 
 // --- File Helpers ---
 function readFile(path, label) {
@@ -99,7 +123,7 @@ function readFile(path, label) {
   return readFileSync(path, 'utf-8').trim();
 }
 
-async function nextReportNumber() { // outdate-bot
+async function nextReportNumber() {
   const { stdout } = await execFileAsync(process.execPath, [join(ROOT, 'reserve-report-num.mjs')], { encoding: 'utf-8' });
   return stdout.trim();
 }
@@ -113,6 +137,14 @@ function loadContext() {
   const cvContent      = readFile(PATHS.cv, 'cv.md');
   const profileContent = readFile(PATHS.profile, '_profile.md');
   const profileYml     = readFile(PATHS.profileYml, 'profile.yml');
+  // _custom.md is optional: an absent file is a valid end state, so no warning.
+  const customContent  = existsSync(PATHS.custom) ? readFileSync(PATHS.custom, 'utf-8').trim() : '';
+  const customSection  = customContent ? `
+═══════════════════════════════════════════════════════
+USER HOUSE RULES & SCORING RULES (_custom.md)
+═══════════════════════════════════════════════════════
+${customContent}
+` : '';
 
   systemPromptTemplate = `You are career-ops, an AI-powered job search assistant.
 You evaluate job offers against the user's CV using a structured A-G scoring system.
@@ -141,7 +173,7 @@ ${profileYml}
 USER ARCHETYPES & NARRATIVE (_profile.md)
 ═══════════════════════════════════════════════════════
 ${profileContent}
-
+${customSection}
 ═══════════════════════════════════════════════════════
 IMPORTANT OPERATING RULES FOR THIS CLI SESSION
 ═══════════════════════════════════════════════════════
@@ -210,7 +242,7 @@ async function evaluateWithRetry(jdText, retries = 5) {
       console.error(`⚠️ API Error (attempt ${attempt}/${retries}): ${err.message}`);
       const status = err?.status ?? err?.response?.status;
       const retryable = status === 429 || status === 503;
-      if (attempt >= retries || !retryable) throw err; // outdate-bot
+      if (attempt >= retries || !retryable) throw err;
       console.log(`⏳ Waiting ${delay/1000}s before retry...`);
       await new Promise(r => setTimeout(r, delay));
       delay *= 2; // Exponential backoff
@@ -218,7 +250,16 @@ async function evaluateWithRetry(jdText, retries = 5) {
   }
 }
 
-export async function processOffer(browser, line, idx, _evaluate = evaluateWithRetry) {
+async function verifyPostingLiveness(browser, url) {
+  const page = await browser.newPage(LIVENESS_CONTEXT_OPTIONS);
+  try {
+    return await checkUrlLiveness(page, url);
+  } finally {
+    await page.close();
+  }
+}
+
+export async function processOffer(browser, line, idx, _evaluate = evaluateWithRetry, _checkLiveness = verifyPostingLiveness) {
   const match = line.match(/- \[\s*\]\s+(https?:\/\/\S+)(?:\s*\|\s*([^|]+)\s*\|\s*(.+))?/);
   if (!match) return { line, processed: false };
 
@@ -230,16 +271,38 @@ export async function processOffer(browser, line, idx, _evaluate = evaluateWithR
   console.log(`🔄 Processing [${idx}]: ${companyHint} - ${titleHint}`);
   console.log(`🔗 URL: ${url}`);
 
+  async function resolveDeadPosting() {
+    // Neither model output nor a failed scrape proves closure. Verify the URL
+    // independently; active/uncertain results preserve pending work.
+    const liveness = await _checkLiveness(browser, url);
+    if (liveness?.result !== 'expired' || isUnreadableVerdict(liveness)) {
+      return { line, processed: false, outcome: 'unconfirmed-dead-posting' };
+    }
+    const label = match[2] ? `${companyHint} | ${titleHint}` : url;
+    const newLine = `- [x] ~~${label}~~ — oferta nieaktywna`;
+    console.log(`⏭️ Closed posting: ${companyHint} - ${titleHint}`);
+    return { line: newLine, processed: true, outcome: 'dead-posting' };
+  }
+
   try {
-    const jdText = await scrapeUrl(browser, url);
+    let jdText;
+    try {
+      jdText = await scrapeUrl(browser, url);
+    } catch {
+      return await resolveDeadPosting();
+    }
     if (!jdText || jdText.length < 100) {
-      throw new Error('Extracted text too short (likely blocked or empty)');
+      return await resolveDeadPosting();
     }
 
     console.log(`🧠 Calling Gemini (${modelName})...`);
     const evaluationText = await _evaluate(`URL: ${url}\n\n${jdText}`);
 
     // Parse output
+    if (/^---DEAD_POSTING---\s*$/m.test(evaluationText)) {
+      return await resolveDeadPosting();
+    }
+
     const summaryMatch = evaluationText.match(/---SCORE_SUMMARY---\s*([\s\S]*?)---END_SUMMARY---/);
     if (!summaryMatch) {
       console.error('Missing SCORE_SUMMARY block from model output:\n' + evaluationText.slice(0, 500));
@@ -263,7 +326,17 @@ export async function processOffer(browser, line, idx, _evaluate = evaluateWithR
     mkdirSync(PATHS.trackerAdditions, { recursive: true });
 
     const num = await nextReportNumber();
-    const today = new Date().toISOString().split('T')[0];
+    // LOCAL calendar day (#3070). This one value becomes three things that have to
+    // agree with each other and with the user's calendar: the report FILENAME
+    // ({num}-{slug}-{today}.md), the report's own `**Date:**` header, and the date
+    // column of the tracker row written for it.
+    //
+    // On the UTC day an evaluation run on a Sunday evening in the Americas produces
+    // 042-acme-2026-08-18.md, dated the 18th, in a tracker row dated the 18th —
+    // while every other date the user sees, and every date the other scripts now
+    // stamp, says the 17th. The filename is the part that cannot be corrected
+    // later: reports are addressed by it.
+    const today = localToday();
     const companySlug = slugifyCompany(company);
     const filename = `${num}-${companySlug}-${today}.md`;
     const reportPath = join(PATHS.reports, filename);
@@ -272,12 +345,12 @@ export async function processOffer(browser, line, idx, _evaluate = evaluateWithR
 **Date:** ${today}
 **URL:** ${url}
 **Archetype:** ${archetype}
-**Score:** ${score} <!-- outdate bot -->
-**Legitimacy:** ${legitimacy} <!-- GitHub diff trigger for bot outdate -->
+**Score:** ${score}
+**Legitimacy:** ${legitimacy}
 **PDF:** pending
 **Tool:** Gemini (${modelName})\n
 ---\n
-${evaluationText.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '').trim()}\n`;
+${withJdArchiveSection(evaluationText.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '').trim(), jdText).trimEnd()}\n`;
 
     writeFileSync(reportPath, reportContent, 'utf-8');
 
@@ -303,6 +376,40 @@ ${evaluationText.replace(/---SCORE_SUMMARY---[\s\S]*?---END_SUMMARY---/, '').tri
   }
 }
 
+// Applies the processed results to the CURRENT text of pipeline.md. A run takes
+// minutes and scan.mjs, plugins.mjs or agent-inbox.mjs may append to the file
+// meanwhile, so each result replaces the first line that still equals the
+// pending line it came from (`originals` is the start-of-run snapshot, indexed
+// like `results`). Every other line is kept as it is; a pending line that was
+// edited or removed during the run is reported in `unmatched`, not rewritten.
+export function mergeProcessedLines(currentText, originals, results) {
+  const lines = currentText.split('\n');
+  const unmatched = [];
+  for (const [lineIdx, res] of results.entries()) {
+    if (!res.processed) continue;
+    const at = lines.indexOf(originals[lineIdx]);
+    if (at === -1) {
+      unmatched.push(originals[lineIdx].match(/https?:\/\/\S+/)?.[0] ?? originals[lineIdx].trim());
+      continue;
+    }
+    lines[at] = res.line;
+  }
+  return { text: lines.join('\n'), unmatched };
+}
+
+// Reads, merges and writes pipeline.md under pipeline-lock.mjs, the lock every
+// other writer of the file takes. Writing back the start-of-run snapshot erased
+// anything appended during the run, and scan-history.tsv already counted it as seen.
+export async function finishPipelineBatch(pipelinePath, originals, results) {
+  await withPipelineLock(pipelinePath, () => {
+    const { text, unmatched } = mergeProcessedLines(readFileSync(pipelinePath, 'utf-8'), originals, results);
+    for (const url of unmatched) {
+      console.error(`⚠️ pipeline.md changed during the run; left ${url} as it is`);
+    }
+    writeFileSync(pipelinePath, text, 'utf-8');
+  });
+}
+
 async function main() {
   setupEnvironment();
   loadContext();
@@ -311,7 +418,7 @@ async function main() {
   const limitCount = limitArg ? parseInt(limitArg.split("=")[1], 10) : 0;
   
   const concArg = process.argv.find(a => a.startsWith("--concurrency="));
-  let CONCURRENCY = concArg ? parseInt(concArg.split("=")[1], 10) : 2; // outdate-bot
+  let CONCURRENCY = concArg ? parseInt(concArg.split("=")[1], 10) : 2;
   if (isNaN(CONCURRENCY) || CONCURRENCY < 1) CONCURRENCY = 2;
 
   if (!existsSync(PATHS.pipeline)) {
@@ -341,12 +448,7 @@ async function main() {
   await browser.close();
 
   // Rewrite pipeline.md inline
-  for (const [lineIdx, res] of results.entries()) {
-    if (res.processed) {
-      pipelineLines[lineIdx] = res.line;
-    }
-  }
-  writeFileSync(PATHS.pipeline, pipelineLines.join('\n'), 'utf-8');
+  await finishPipelineBatch(PATHS.pipeline, pipelineLines, results);
 
   console.log(`\n🎉 Batch processing complete! Merging tracker additions...`);
   try {

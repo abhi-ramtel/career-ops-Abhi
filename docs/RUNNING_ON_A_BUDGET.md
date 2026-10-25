@@ -81,7 +81,7 @@ Project-level `.claude/settings.json` and `~/.claude/settings.local.json` can se
 
 ### The batch mode is the exception worth knowing
 
-`batch/batch-runner.sh` drives `claude -p` workers, and the headless path does not use the interactive login. If you want batch runs on your subscription rather than on credits, generate a long-lived token once:
+`batch/batch-runner.sh` drives `claude -p` workers by default, and the headless path does not use the interactive login. If you want batch runs on your subscription rather than on credits, generate a long-lived token once:
 
 ```bash
 claude setup-token          # requires an active Claude subscription
@@ -282,7 +282,7 @@ When choosing a budget-friendly model, you need strong reasoning capabilities to
 | **Kimi K2.5** | Moonshot AI | API pricing applies | Verified with OpenCode using the Moonshot OpenAI-compatible endpoint. Produces structured Markdown suitable for Career-Ops evaluations. See the verified OpenCode recipe below. |
 
 
-> **Standalone evaluator (no CLI config needed):** every OpenAI-compatible provider above (DeepSeek, Qwen, GLM, Together, Groq, OpenRouter, Requesty, …) works directly through `node openai-eval.mjs` — just set a base URL, model, and key:
+> **Standalone evaluator (no CLI config needed):** every OpenAI-compatible provider above (DeepSeek, Qwen, GLM, Together, Groq, OpenRouter, Requesty, Cheaper Inference, API Route, …) works directly through `node openai-eval.mjs` — just set a base URL, model, and key:
 > ```bash
 > OPENAI_BASE_URL=https://openrouter.ai/api/v1 \
 > OPENAI_MODEL=deepseek/deepseek-chat \
@@ -296,6 +296,22 @@ When choosing a budget-friendly model, you need strong reasoning capabilities to
 > OPENAI_API_KEY=your_requesty_key \
 > node openai-eval.mjs --file ./jds/job.txt
 > ```
+> Cheaper Inference (`https://api.cheaperinference.com/v1`) is an OpenAI-compatible gateway that works the same way. Model ids are bare (no vendor prefix), such as `gpt-5.4-mini`:
+> ```bash
+> OPENAI_BASE_URL=https://api.cheaperinference.com/v1 \
+> OPENAI_MODEL=gpt-5.4-mini \
+> OPENAI_API_KEY=your_cheaperinference_key \
+> node openai-eval.mjs --file ./jds/job.txt
+> ```
+>
+> API Route (`https://global.api-route.com/v1`) uses the same OpenAI-compatible configuration. Set an exact chat-completions model id available to your account (listed by its authenticated `/v1/models` endpoint); `gpt-5.5` is an example, not a new default:
+> ```bash
+> OPENAI_BASE_URL=https://global.api-route.com/v1 \
+> OPENAI_MODEL=gpt-5.5 \
+> OPENAI_API_KEY=your_api_route_key \
+> node openai-eval.mjs --file ./jds/job.txt
+> ```
+> As with other hosted providers, this sends your CV and job description to the configured endpoint. Use it only if you choose to share that data with the provider.
 >
 > Run `node openai-eval.mjs --help` for per-provider examples. For 100% local/private use, point `--url` at a local server (LM Studio / llama.cpp / vLLM) or use `node ollama-eval.mjs`.
 
@@ -364,9 +380,14 @@ To prevent unnecessary API costs or hitting rate limits, implement the following
    ./batch/batch-runner.sh --dry-run
    ```
 3. **Resume Interrupted Runs**:
-   If a batch run is interrupted by a rate limit or network error, do not restart from scratch. Use the `--resume-paused` flag to continue from where it left off, skipping completed jobs and preventing wasted tokens:
+   If a batch run stops part-way, do not restart from scratch. Run the same command again: completed offers are skipped and the rest are picked up, so no tokens go to work that already finished:
+   ```bash
+   ./batch/batch-runner.sh
+   ```
+   If the run paused on a Claude session or usage limit, the offers that hit it are marked `paused_rate_limit`, and a plain run leaves them alone. Once the limit resets, re-run just those with `--resume-paused`, then run without it for the offers that had not started:
    ```bash
    ./batch/batch-runner.sh --resume-paused
+   ./batch/batch-runner.sh
    ```
 4. **Use `--verify` on Scans**:
    When running job board scans, use the liveness verifier to filter out expired postings before they enter your pipeline. This prevents wasting LLM tokens evaluating closed jobs:

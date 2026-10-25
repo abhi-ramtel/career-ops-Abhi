@@ -17,7 +17,7 @@
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
 import { parseCompanyInput, renderPortalEntry, withCompanyMeta, yamlScalar } from './discover-ats.mjs';
 import { validatePortalsConfig } from './validate-portals.mjs';
 
@@ -37,7 +37,7 @@ const validate = (cfg) => validatePortalsConfig(cfg, { providerIds: PROVIDERS })
 
 console.log('\n━━━ Shipped dataset is well-formed ━━━');
 const raw = readFileSync(DATASET, 'utf-8');
-const doc = yaml.load(raw);
+const doc = loadYaml(raw);
 {
   ok('parses as YAML with a companies: list', Array.isArray(doc?.companies));
   ok('has a meaningful number of companies', doc.companies.length >= 20);
@@ -101,7 +101,7 @@ console.log('\n━━━ Rendered portals.yml entries are valid config ━━━
   ok('emits visa_types as a flow list', entry.includes('visa_types: [H-1B, green card]'));
   ok('emits last_verified', entry.includes('last_verified: "2026-08-17"'));
 
-  const parsed = yaml.load(`tracked_companies:\n${entry}`);
+  const parsed = loadYaml(`tracked_companies:\n${entry}`);
   const c = parsed.tracked_companies[0];
   ok('round-trips through YAML', c.name === 'Microsoft' && c.fortune500 === true);
   ok('last_verified round-trips as a string, not a Date', typeof c.sponsorship.last_verified === 'string');

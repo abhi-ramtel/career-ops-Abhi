@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { isMainModule } from './lib/is-main-module.mjs';
+
 /**
  * resume-density.mjs — one-page fill measurement for tailored CVs
  *
@@ -239,8 +241,12 @@ export function formatDensityWarning(density) {
 export default measureDensity;
 
 // ── CLI / self-test ─────────────────────────────────────────────────
-const isDirect = process.argv[1] &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+const isDirect = isMainModule(import.meta.url);
+
+if (isDirect && (process.argv.includes('--help') || process.argv.includes('-h'))) {
+  console.log("Usage: node resume-density.mjs <rendered.html> [cv.md]\n       node resume-density.mjs --self-test");
+  process.exit(0);
+}
 
 if (isDirect) {
   const args = process.argv.slice(2);

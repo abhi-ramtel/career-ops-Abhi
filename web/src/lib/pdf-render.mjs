@@ -23,7 +23,9 @@ import path from "node:path";
  *   produce any output at all", or null when it did. That question is about the
  *   transport, not this module, so the route owns the wording and passes it in
  *   rather than both places carrying the same two strings.
- * @property {boolean} sawError - Anything error-shaped on stderr.
+ * @property {boolean} sawError - An authoritative structured-stream error (the
+ *   CLI's own JSONL `error` event) — never a stderr keyword match, which must
+ *   not override a clean exit (#1974).
  * @property {boolean} cleanExit - Exit code 0 (not killed, not non-zero).
  * @property {boolean} hasPaths - The backend resolved its scratch/final paths.
  */
@@ -114,8 +116,9 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
  * JSON stdout when present (mark-pdf-ready.mjs prints a JSON payload even on
  * a failure exit when --json is passed) so a caller can surface the specific
  * reason (not-found / ambiguous / lock-timeout / ...) rather than raw stderr.
+ * `code` is the exit code, or null when the child never started.
  * @param {{spawnFn: Function, execPath: string, root: string, reportNum: string}} args
- * @returns {Promise<{ok: boolean, data: object | null, stderr: string}>}
+ * @returns {Promise<{ok: boolean, code: number | null, data: {error?: string} | null, stderr: string}>}
  */
 export function markTrackerReady({ spawnFn, execPath, root, reportNum }) {
   return new Promise((resolve) => {
@@ -127,9 +130,9 @@ export function markTrackerReady({ spawnFn, execPath, root, reportNum }) {
     child.on("close", (code) => {
       let data = null;
       try { data = JSON.parse(stdout); } catch { /* not JSON, or exited before printing any */ }
-      resolve({ ok: code === 0, data, stderr: stderr.trim() });
+      resolve({ ok: code === 0, code, data, stderr: stderr.trim() });
     });
-    child.on("error", (e) => resolve({ ok: false, data: null, stderr: `mark-pdf-ready.mjs failed to start: ${e.message}` }));
+    child.on("error", (e) => resolve({ ok: false, code: null, data: null, stderr: `mark-pdf-ready.mjs failed to start: ${e.message}` }));
   });
 }
 
@@ -163,6 +166,20 @@ export function cleanupPdfScratch(scratchDir, prefix) {
 }
 
 /**
+ * Keep the rendered HTML beside its PDF. The CV Studio edits that HTML, and
+ * the scratch copy is deleted right after the render.
+ * @param {{html: string, finalPdf: string}} pdfPaths
+ * @param {string[]} warnings
+ */
+export function keepTailoredHtml(pdfPaths, warnings) {
+  try {
+    fs.copyFileSync(pdfPaths.html, pdfPaths.finalPdf.replace(/\.pdf$/i, ".html"));
+  } catch (err) {
+    warnings.push(`PDF rendered, but its HTML was not kept for the CV Studio: ${err.message}`);
+  }
+}
+
+/**
  * @typedef {Object} RenderFailedResult
  * @property {"render-failed"} kind
  * @property {string} error
@@ -170,7 +187,7 @@ export function cleanupPdfScratch(scratchDir, prefix) {
 /**
  * @typedef {Object} RenderedResult
  * @property {"rendered"} kind
- * @property {string[]} warnings - Non-fatal issues to surface to the user (e.g. a tracker row that was not marked).
+ * @property {string[]} warnings - Non-fatal issues to surface to the user (e.g. a renderer advisory, or a tracker row that was not marked).
  */
 /** @typedef {RenderFailedResult | RenderedResult} RenderResult */
 
@@ -190,10 +207,23 @@ export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, form
   const warnings = [];
 
   const render = await spawnGeneratePdf({ spawnFn, execPath, root, html: pdfPaths.html, finalPdf: pdfPaths.finalPdf, format, reportNum });
+  if (render.ok) keepTailoredHtml(pdfPaths, warnings);
   cleanupPdfScratch(path.dirname(pdfPaths.html), `cv-web-${reportNum}.`);
 
   if (!render.ok) {
     return { kind: "render-failed", error: render.stderr || "PDF rendering failed." };
+  }
+
+  // A render that exits 0 can still have written advisories to stderr, and two
+  // of them matter to whoever asked for this PDF: the page-budget overflow
+  // (warning-only unless --strict-pages) and the CV fact check's advisory
+  // phrases. Reading render.stderr only in the failure branch above collected
+  // both and dropped them, so on the web path an unsupported claim the fact
+  // gate flagged reached nobody. One warning per line, blank lines skipped, so
+  // a clean render still reports none.
+  for (const line of render.stderr.split("\n")) {
+    const text = line.trim();
+    if (text) warnings.push(text);
   }
 
   // The PDF is the real deliverable and it already rendered successfully — a

@@ -1,3 +1,4 @@
+import { isMainModule } from './lib/is-main-module.mjs';
 /**
  * scan-refine.mjs — post-filter refinement for scan.mjs.
  *
@@ -382,8 +383,12 @@ export async function refineOffers(offers, config = {}, { log = () => {}, resort
 export default refineOffers;
 
 // ── Self-test ───────────────────────────────────────────────────────
-const isDirect = process.argv[1]
-  && import.meta.url === `file://${process.argv[1]}`;
+const isDirect = isMainModule(import.meta.url);
+
+if (isDirect && (process.argv.includes('--help') || process.argv.includes('-h'))) {
+  console.log("Usage: node scan-refine.mjs --self-test\n       Import refineOffers() to refine scanner results.");
+  process.exit(0);
+}
 
 if (isDirect && process.argv.includes('--self-test')) {
   let failures = 0;

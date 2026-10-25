@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+
+import { isMainModule } from './lib/is-main-module.mjs';
 /**
  * auto-apply.mjs — Greenhouse / Ashby application prep.
  *
@@ -35,7 +37,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
+import { getProfilePath } from './path-resolver.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 career-ops';
@@ -286,9 +289,9 @@ export function classifyField(field) {
 
 // ── Profile → answers ───────────────────────────────────────────────
 
-export function loadProfile(path = resolve(ROOT, 'config', 'profile.yml')) {
+export function loadProfile(path = getProfilePath()) {
   if (!existsSync(path)) throw new Error(`profile not found: ${path}`);
-  return yaml.load(readFileSync(path, 'utf-8')) || {};
+  return loadYaml(readFileSync(path, 'utf-8')) || {};
 }
 
 function splitName(full) {
@@ -747,7 +750,12 @@ function runSelfTest() {
   return failures === 0 ? 0 : 1;
 }
 
-const isDirect = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+const isDirect = isMainModule(import.meta.url);
+
+if (isDirect && (process.argv.includes('--help') || process.argv.includes('-h'))) {
+  console.log("Usage: node auto-apply.mjs --url <posting_url> [--json] [--out <file>]\n       node auto-apply.mjs --self-test");
+  process.exit(0);
+}
 if (isDirect) {
   if (process.argv.includes('--self-test')) {
     process.exit(runSelfTest());

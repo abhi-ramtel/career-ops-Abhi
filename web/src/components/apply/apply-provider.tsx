@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ApplyField } from "@/lib/apply/extract";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
+import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 type Meta = { needsConfirmation?: boolean };
@@ -75,6 +76,10 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState("");
   const sessionId = useRef<string | null>(null);
   const companyRef = useRef<string>("");
+  // Mirrors `n` for the async fetch below, same reason as companyRef: the
+  // fetch fires after state may have moved on, so a plain closure over `n`
+  // could send a stale (or, worse, the NEXT session's) report identity.
+  const nRef = useRef<string>("");
   const fieldsRef = useRef<ApplyField[]>([]);
   fieldsRef.current = fields;
   const answersRef = useRef<Record<string, string>>({});
@@ -84,6 +89,14 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   // be recalled, so each one carries the generation it started in and drops its
   // results if that generation is no longer current.
   const generation = useRef(0);
+  // The fill reader blocks until the next chunk. Dropping the generation does
+  // not unblock it, so the controller is aborted in the same places the
+  // generation moves.
+  const fillAbort = useRef<AbortController | null>(null);
+  const dropFill = () => {
+    fillAbort.current?.abort();
+    fillAbort.current = null;
+  };
   // When a session opens with {prefill:true}, auto-fire prefill once fields are
   // ready — driven by an effect (not a fragile setTimeout) so it can't race the
   // session response or a navigation.
@@ -150,6 +163,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
 
   const open = useCallback(async (u: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => {
     const gen = ++generation.current;
+    dropFill();
     // Opening a second form abandons the first one's browser exactly the way
     // leaving the page does, so it is released here too.
     if (sessionId.current) closeSession(sessionId.current);
@@ -167,6 +181,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setCompany(opts?.company ?? "");
     companyRef.current = opts?.company ?? "";
     setN(opts?.n ?? "");
+    nRef.current = opts?.n ?? "";
     setFrom(opts?.from ?? "");
     pendingPrefill.current = false;
     try {
@@ -226,7 +241,9 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       setMeta(m);
     };
     try {
-      const r = await fetch("/api/apply/prefill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId() }) });
+      // company + application travel with the pre-fill for the same reason they
+      // travel with the fill: both halves resolve the one tailored CV from them.
+      const r = await fetch("/api/apply/prefill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), company: companyRef.current, application: nRef.current }) });
       if (generation.current !== gen) return; // left mid-prefill
       if (!r.body) {
         setError("Couldn't pre-fill — no response stream.");
@@ -302,7 +319,7 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setStatus("filling");
     setSteps([]);
     try {
-      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current }) });
+      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current, application: nRef.current }) });
       const d = await r.json();
       // Also stops the escalation below from starting an agent drive on a
       // session the user has already walked away from.
@@ -349,47 +366,25 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setDriveSteps([]);
     setError("");
     setStatus("filling");
+    fillAbort.current?.abort();
+    const controller = new AbortController();
+    fillAbort.current = controller;
     try {
-      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans }) });
-      if (generation.current !== gen) return; // left mid-fill
-      if (!r.body) {
-        setError("The agent couldn't start filling.");
-        setStatus("error");
-        return;
+      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans }), signal: controller.signal });
+      if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
+      const result = await readFillResult(r, (step) => setDriveSteps((p) => [...p, step]), () => generation.current === gen, controller.signal);
+      if (!result || controller.signal.aborted || generation.current !== gen) return; // left mid-fill
+      const outcome = screenForFill(result);
+      if (outcome.status === "done") {
+        setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: outcome.issue }]);
+      } else {
+        setError(outcome.error);
       }
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (generation.current !== gen) return; // left mid-fill
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let ev: { t?: string; message?: string; filled?: boolean } & DriveStep;
-          try {
-            ev = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          if (ev.t === "step") setDriveSteps((p) => [...p, ev as DriveStep]);
-          else if (ev.t === "done") {
-            setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: ev.filled ? "AI filled the form for you — review every answer on the real form, then submit it yourself." : "AI did its best but couldn't finish — check the real form before submitting." }]);
-            setStatus("done");
-          } else if (ev.t === "error") {
-            setError(ev.message || "The agent couldn't fill the form.");
-            setStatus("error");
-          }
-        }
-      }
+      setStatus(outcome.status);
     } catch (e) {
-      if (generation.current !== gen) return; // left mid-fill
-      setError(`The agent couldn't fill the form: ${e instanceof Error ? e.message : "stream error"}.`);
-      setStatus("error");
+      if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
+      setError(`The agent couldn't fill the form: ${e instanceof Error ? e.message : "stream error"}. Check the real form before trying again.`);
+      setStatus("ready");
     }
   }, []);
   const agentFillRef = useRef(agentFill);
@@ -399,9 +394,11 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     // Invalidate anything still in flight before clearing state, so a response
     // that lands after this can't repopulate the page the user just left.
     generation.current += 1;
+    dropFill();
     if (sessionId.current) closeSession(sessionId.current);
     sessionId.current = null;
     companyRef.current = "";
+    nRef.current = "";
     pendingPrefill.current = false;
     setStatus("idle");
     setUrl("");

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { isMainModule } from './lib/is-main-module.mjs';
+
 /**
  * experience-level.mjs — years-of-experience parsing and early-career banding
  *
@@ -287,8 +289,12 @@ export function compareEarlyCareerFit(a, b) {
 export default classifyExperienceLevel;
 
 // ── CLI / self-test ─────────────────────────────────────────────────
-const isDirect = process.argv[1] &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+const isDirect = isMainModule(import.meta.url);
+
+if (isDirect && (process.argv.includes('--help') || process.argv.includes('-h'))) {
+  console.log("Usage: node experience-level.mjs \"<title>\" \"[description]\"\n       node experience-level.mjs --self-test");
+  process.exit(0);
+}
 
 if (isDirect) {
   const args = process.argv.slice(2);

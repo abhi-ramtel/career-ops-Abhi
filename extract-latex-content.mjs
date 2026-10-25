@@ -18,7 +18,8 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { resolve, basename, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
+import { getProfilePath } from './path-resolver.mjs';
 import { buildManifest } from './lib/latex-content.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
@@ -37,10 +38,10 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
  *
  * @returns {{ path: string, from: string } | null}
  */
-export function resolveLatexSource(profilePath = resolve(ROOT, 'config', 'profile.yml')) {
+export function resolveLatexSource(profilePath = getProfilePath()) {
   try {
     if (existsSync(profilePath)) {
-      const profile = yaml.load(readFileSync(profilePath, 'utf-8')) || {};
+      const profile = loadYaml(readFileSync(profilePath, 'utf-8')) || {};
       const configured = profile?.latex?.source;
       if (typeof configured === 'string' && configured.trim()) {
         // Relative to the project root, not the caller's cwd — the profile is a

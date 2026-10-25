@@ -200,11 +200,11 @@ En las ofertas y negociaciones en español, ciertos términos no existen en los 
 3. Citar líneas exactas del CV en el matching
 4. Usar WebSearch para datos de remuneración y de empresa
 5. Registrar en el tracker después de cada evaluación
-6. Generar el contenido en el idioma de la oferta (español si la oferta está en español, inglés si no)
+6. Generar el contenido para el usuario en `{language.output}` de `config/profile.yml` (inglés si no está definido), sea cual sea el idioma de la oferta. Conservar los términos de este mercado y explicarlos en ese idioma cuando haga falta
 7. Ser directo y concreto — sin relleno
 8. Español técnico natural en los textos generados. Frases cortas, verbos de acción, evitar la voz pasiva. No forzar la traducción de términos técnicos (stack, pipeline, deployment, embedding)
 8b. **URLs de case studies en el Professional Summary del PDF:** Si el PDF menciona case studies o demos, las URLs DEBEN aparecer en el primer párrafo (Professional Summary). Los reclutadores suelen leer solo el summary. Todas las URLs en HTML con `white-space: nowrap`
-9. **Entradas del tracker en TSV** — NUNCA editar applications.md directamente para nuevas entradas. Escribir el TSV en `batch/tracker-additions/`, `merge-tracker.mjs` gestiona la fusión
+9. **Entradas del tracker en TSV** — NUNCA editar applications.md directamente para nuevas entradas. Escribir el TSV en `batch/tracker-additions/`, `merge-tracker.mjs` gestiona la fusión. Escribir primero una fila de **nombres de columna** y debajo exactamente una fila de datos (ver AGENTS.md, «TSV Format for Tracker Additions»). Esa fila de nombres es lo que permite a `merge-tracker.mjs` resolver los campos por NOMBRE en vez de adivinar qué columna es score y cuál status
 10. **`**URL:**` en cada cabecera de report** — entre Score y PDF
 
 ### Herramientas
@@ -215,6 +215,6 @@ En las ofertas y negociaciones en español, ciertos términos no existen en los 
 | WebFetch | Fallback para extraer ofertas desde páginas estáticas |
 | Playwright | Verificar si las ofertas están activas (browser_navigate + browser_snapshot), extraer ofertas desde SPAs. **CRÍTICO: NUNCA 2+ agentes en paralelo con Playwright — comparten la misma instancia del navegador** |
 | Read | cv.md, article-digest.md, cv-template.html |
-| Write | HTML temporal para PDF, applications.md, reports .md |
-| Edit | Actualizar el tracker |
-| Bash | `node generate-pdf.mjs` |
+| Write | HTML temporal para PDF, reports .md, TSV de nuevas entradas del tracker en `batch/tracker-additions/` (nunca `applications.md` directamente) |
+| Edit | Correcciones en reports y otro contenido generado. Nunca la tabla del tracker: las filas nuevas entran como TSV y se fusionan con `node merge-tracker.mjs`; los cambios de estado y de notas pasan por `node set-status.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |
